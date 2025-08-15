@@ -1,63 +1,34 @@
-# encdec_config.py
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
-# file: encdec_config.py (修改)
+# file: encdec_config.py (修改后以适配CausalVAE)
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Dict
 
 
 @dataclass
 class EncoderDecoderConfig:
-    # 移除了旧的MLP隐藏层维度 (ENCODER_HIDDEN_DIMS, DECODER_HIDDEN_DIMS)
-
-    # 新增TCN每层的输出通道数配置
+    # --- TCN 核心架构参数 (保持不变) ---
     TCN_CHANNELS: List[int] = field(
         default_factory=lambda: [64, 128, 256]
     )
     LATENT_DIM: int = 64
+
+    # --- 新增：因果头 (Causal Head) 参数 ---
+    # 这个值代表了数据中的总特征数 (静态+时序)，用于构建 N x N 的因果矩阵。
+    # 我们在这里先设置一个占位符，实际值将在运行时由DataProcessor确定。
+    NUM_TOTAL_FEATURES: int = 70  # 这是一个示例值，请根据您的数据调整或在代码中动态设置
+
+    # --- 新增：VAE 损失函数权重 ---
+    # KL散度损失的权重，用于平衡重构损失和潜在空间正则化
+    BETA_KL: float = 1.0
+    # 因果损失的权重，用于平衡重构损失和因果矩阵学习
+    GAMMA_CAUSAL: float = 1.0
+
+    # --- 训练参数 ---
     LEARNING_RATE: float = 0.001
     BATCH_SIZE: int = 32
     NUM_EPOCHS: int = 100
     DROPOUT_RATE: float = 0.2
 
-    # 更新模型和输出文件的名称，以避免与旧版本混淆
-    MODEL_SAVE_PATH: str = 'tcn_encoder_decoder_model.pkl'
-    ENCODED_DATA_PATH: str = 'tcn_encoded_data.pkl'
-'''
-def get_default_encoder_dims() -> List[int]:
-    return [512, 256, 128]
-
-def get_default_decoder_dims() -> List[int]:
-    return [128, 256, 512]
-
-@dataclass
-class EncoderDecoderConfig:
-    # Architecture dimensions
-    ENCODER_HIDDEN_DIMS: List[int] = field(default_factory=get_default_encoder_dims)
-    DECODER_HIDDEN_DIMS: List[int] = field(default_factory=get_default_decoder_dims)
-    LATENT_DIM: int = 64
-    
-    # Training parameters
-    LEARNING_RATE: float = 0.001
-    BATCH_SIZE: int = 32
-    NUM_EPOCHS: int = 100
-    DROPOUT_RATE: float = 0.2
-    
-    # Model parameters
-    USE_BATCH_NORM: bool = True
-    ACTIVATION: str = 'relu'
-    
-    # File paths
-    MODEL_SAVE_PATH: str = 'encoder_decoder_model.pkl'
-    ENCODED_DATA_PATH: str = 'encoded_data.pkl'
-    
-    # Weights for different components in loss function
-    RECONSTRUCTION_WEIGHTS: Dict[str, float] = field(
-        default_factory=lambda: {
-            'static': 1.0,
-            'temporal': 1.0,
-            'mask': 1.0,
-            'time': 0.1
-        }
-    )'''
+    # --- 文件路径 (更新为新版本) ---
+    MODEL_SAVE_PATH: str = 'causal_vae_model.pkl'
+    ENCODED_DATA_PATH: str = 'causal_vae_encoded_data.pkl'

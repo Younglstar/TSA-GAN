@@ -1,141 +1,154 @@
-# encdec_model.py
-import torch
-import torch.nn as nn
-from tcn import TemporalConvNet  # 导入我们新的TCN模块
-
-
-# file: encdec_model.py
-
-
-# 在 train_encdec.py 或 encdec_model.py 中修改/替换
-
-# ... (其他 import) ...
-from tcn import TemporalConvNet  # 导入我们新创建的TCN模块
-
-# file: encdec_model.py (推荐的文件名)
+# file: encdec_model.py (重构为CausalVAE)
 
 import torch
 import torch.nn as nn
 from tcn import TemporalConvNet  # 确保 tcn.py 在您的项目中
 
 
-# ----------------------------------------------------------------------------
-# 我们将 Encoder 和 Decoder 定义为内部类，以保持代码的模块化和清晰性。
-# 它们不会被直接从外部调用，而是作为 TCNAutoencoder 的一部分。
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# == 新的CVAE编码器，包含潜在头和因果头 ==
+# ==============================================================================
 
-class _TCNEncoder(nn.Module):
-    """
-    内部编码器模块 (Internal Encoder Module).
-    """
+class _CVAE_Encoder(nn.Module):
+    def __init__(self, input_dim, tcn_channels, latent_dim, num_total_features, dropout):
+        super().__init__()
 
-    def __init__(self, input_dim, tcn_channels, latent_dim, dropout):
-        super(_TCNEncoder, self).__init__()
-        self.tcn = TemporalConvNet(
+        # 1. 共享的TCN主干网络
+        self.tcn_backbone = TemporalConvNet(
             num_inputs=input_dim,
             num_channels=tcn_channels,
             kernel_size=3,
             dropout=dropout
         )
-        self.fc = nn.Linear(tcn_channels[-1], latent_dim)
+
+        last_channel_dim = tcn_channels[-1]
+
+        # 2. 并行的输出头
+        # 2a. VAE的潜在分布头
+        self.latent_head_mu = nn.Linear(last_channel_dim, latent_dim)
+        self.latent_head_logvar = nn.Linear(last_channel_dim, latent_dim)
+
+        # 2b. 因果邻接矩阵头
+        # 注意：这里的隐藏层可以根据需要添加
+        self.causal_head = nn.Sequential(
+            nn.Linear(last_channel_dim, last_channel_dim // 2),
+            nn.ReLU(),
+            nn.Linear(last_channel_dim // 2, num_total_features * num_total_features),
+            nn.Sigmoid()  # 输出概率
+        )
+        self.num_total_features = num_total_features
 
     def forward(self, x):
-        # 输入 x: (N, L, C_in)
-        # TCN 需要 (N, C_in, L)
-        x = x.permute(0, 2, 1)
-        tcn_out = self.tcn(x)
-        # 取最后一个时间步的输出并映射到潜在空间
-        latent_representation = self.fc(tcn_out[:, :, -1])
-        return latent_representation
+        # x: (N, L, C_in)
+        x = x.permute(0, 2, 1)  # -> (N, C_in, L)
+
+        # 通过TCN主干网络
+        h_sequence = self.tcn_backbone(x)  # -> (N, C_out, L)
+
+        # 全局平均池化得到摘要向量
+        h_summary = torch.mean(h_sequence, dim=2)  # -> (N, C_out)
+
+        # 通过两个并行的头
+        mu = self.latent_head_mu(h_summary)
+        logvar = self.latent_head_logvar(h_summary)
+
+        A_pred_flat = self.causal_head(h_summary)
+        A_pred = A_pred_flat.view(-1, self.num_total_features, self.num_total_features)
+
+        return mu, logvar, A_pred
 
 
-class _TCNDecoder(nn.Module):
-    """
-    内部解码器模块 (Internal Decoder Module).
-    """
+# ==============================================================================
+# == 新的CVAE解码器，可以重构数据和掩码 ==
+# ==============================================================================
 
+class _CVAE_Decoder(nn.Module):
     def __init__(self, latent_dim, tcn_channels, output_dim, sequence_length, dropout):
-        super(_TCNDecoder, self).__init__()
+        super().__init__()
         self.sequence_length = sequence_length
-        # TCN输入通道应与编码器TCN的最后一个通道匹配，但为了灵活性，我们在这里独立定义
         tcn_input_channel = tcn_channels[0]
 
-        self.fc = nn.Linear(latent_dim, tcn_input_channel * sequence_length)
+        # 初始全连接层，用于投影和序列展开
+        self.fc_initial = nn.Linear(latent_dim, tcn_input_channel * sequence_length)
 
-        # 解码器的TCN通道可以是编码器的逆序
         decoder_tcn_channels = list(reversed(tcn_channels))
 
-        self.tcn = TemporalConvNet(
+        # TCN网络用于精炼时间模式
+        self.tcn_refiner = TemporalConvNet(
             num_inputs=tcn_input_channel,
             num_channels=decoder_tcn_channels,
             kernel_size=3,
             dropout=dropout
         )
-        self.out_conv = nn.Conv1d(decoder_tcn_channels[-1], output_dim, 1)
+
+        last_channel_dim = decoder_tcn_channels[-1]
+
+        # 多任务输出头
+        # 3a. 重构原始数据 X
+        self.output_head_data = nn.Conv1d(last_channel_dim, output_dim, 1)
+        # 3b. 重构掩码 M
+        self.output_head_mask = nn.Sequential(
+            nn.Conv1d(last_channel_dim, output_dim, 1),
+            nn.Sigmoid()  # 掩码是0到1的概率
+        )
 
     def forward(self, z):
         # z: (N, latent_dim)
-        x = self.fc(z)
-        # 重塑为TCN的输入格式 (N, C, L)
-        x = x.view(z.size(0), -1, self.sequence_length)
-        x = self.tcn(x)
-        x = self.out_conv(x)
-        # 转换回 (N, L, C_out)
-        x = x.permute(0, 2, 1)
-        return x
+        x = self.fc_initial(z)
+        x = x.view(z.size(0), -1, self.sequence_length)  # -> (N, C_inter, L)
+
+        refined_sequence = self.tcn_refiner(x)  # -> (N, C_out, L)
+
+        # 通过两个输出头
+        reconstructed_data = self.output_head_data(refined_sequence).permute(0, 2, 1)  # -> (N, L, D_out)
+        reconstructed_mask = self.output_head_mask(refined_sequence).permute(0, 2, 1)  # -> (N, L, D_out)
+
+        return reconstructed_data, reconstructed_mask
 
 
-# ----------------------------------------------------------------------------
-# 这是您将在 train_encdec.py 中直接使用的主要模型类。
-# ----------------------------------------------------------------------------
+# ==============================================================================
+# == 最终的CausalVAE模型，整合了编码器和解码器 ==
+# ==============================================================================
 
-class TCNAutoencoder(nn.Module):
-    """
-    一个集成了TCN编码器和解码器的自编码器模型。
-    """
+class CausalVAE(nn.Module):
+    def __init__(self, input_dim, output_dim, sequence_length, tcn_channels, latent_dim, num_total_features,
+                 dropout=0.2):
+        super().__init__()
 
-    def __init__(self, input_dim, output_dim, sequence_length, tcn_channels, latent_dim, dropout=0.2):
-        """
-        Args:
-            input_dim (int): 输入序列中每个时间步的特征数量。
-            output_dim (int): 输出序列中每个时间步的特征数量。
-            sequence_length (int): 序列的长度。
-            tcn_channels (list): TCN每个残差块的输出通道列表。
-            latent_dim (int): 潜在空间的维度。
-            dropout (float): Dropout概率。
-        """
-        super(TCNAutoencoder, self).__init__()
-
-        self.encoder = _TCNEncoder(
+        self.encoder = _CVAE_Encoder(
             input_dim=input_dim,
             tcn_channels=tcn_channels,
             latent_dim=latent_dim,
+            num_total_features=num_total_features,
             dropout=dropout
         )
 
-        self.decoder = _TCNDecoder(
+        self.decoder = _CVAE_Decoder(
             latent_dim=latent_dim,
-            tcn_channels=tcn_channels,  # 注意：这里我们将原始通道列表传入
+            tcn_channels=tcn_channels,
             output_dim=output_dim,
             sequence_length=sequence_length,
             dropout=dropout
         )
 
+    def reparameterize(self, mu, logvar):
+        """
+        执行重参数化技巧 VAE的核心
+        z = μ + σ * ε, 其中 ε ~ N(0, 1)
+        """
+        std = torch.exp(0.5 * logvar)
+        epsilon = torch.randn_like(std)
+        return mu + std * epsilon
+
     def forward(self, x):
-        """
-        模型的前向传播。
+        # 1. 编码
+        mu, logvar, A_pred = self.encoder(x)
 
-        Args:
-            x (Tensor): 输入张量，形状为 (Batch_Size, Sequence_Length, Input_Dim)。
+        # 2. 从学习到的分布中采样z
+        z = self.reparameterize(mu, logvar)
 
-        Returns:
-            tuple: 包含重构数据和潜在表示的元组 (reconstructed_x, latent_z)。
-        """
-        # 编码过程
-        latent_z = self.encoder(x)
+        # 3. 解码
+        reconstructed_data, reconstructed_mask = self.decoder(z)
 
-        # 解码过程
-        reconstructed_x = self.decoder(latent_z)
-
-        return reconstructed_x, latent_z
-
+        # 返回所有用于计算复合损失函数的部分
+        return reconstructed_data, reconstructed_mask, mu, logvar, A_pred
