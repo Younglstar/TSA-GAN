@@ -51,16 +51,18 @@ def plot_gan_loss_curves(history: list, save_path: str):
     print(f"✅ GAN损失曲线图已保存至: {save_path}")
 
 
+
+
 def setup_models(input_dim: int, config: GANConfig) -> tuple[Generator, Discriminator, MappingNetwork]:
-    """初始化所有GAN模型"""
+    """(已修改) 初始化所有GAN模型。"""
     generator = Generator(
-        w_dim=config.W_DIM, output_dim=input_dim, hidden_dims=config.GENERATOR_HIDDEN_DIMS,
-        attention_channels=config.ATTENTION_CHANNELS, attention_seq_len=config.ATTENTION_SEQ_LEN,
-        dropout_rate=config.DROPOUT_RATE, use_batch_norm=config.USE_BATCH_NORM
+        w_dim=config.W_DIM,
+        output_dim=input_dim
     )
     discriminator = Discriminator(
-        input_dim=input_dim, hidden_dims=config.DISCRIMINATOR_HIDDEN_DIMS,
-        dropout_rate=config.DROPOUT_RATE, use_batch_norm=config.USE_BATCH_NORM
+        input_dim=input_dim,
+        hidden_dims=config.DISCRIMINATOR_HIDDEN_DIMS,
+        dropout_rate=config.DROPOUT_RATE,
     )
     mapping_network = MappingNetwork(
         z_dim=config.NOISE_DIM, w_dim=config.W_DIM,

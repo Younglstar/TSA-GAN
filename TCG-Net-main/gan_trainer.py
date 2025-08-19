@@ -25,14 +25,15 @@ class GANTrainer:
         self.config = config
         self.device = device
 
+        # --- 核心修改：使用新的beta参数 ---
         self.g_optimizer = optim.Adam(
-            self.generator.parameters(), lr=config.LEARNING_RATE_G, betas=(0.5, 0.9)
+            generator.parameters(), lr=config.LEARNING_RATE_G, betas=(config.ADAM_BETA1, config.ADAM_BETA2)
         )
         self.d_optimizer = optim.Adam(
-            self.discriminator.parameters(), lr=config.LEARNING_RATE_D, betas=(0.5, 0.9)
+            discriminator.parameters(), lr=config.LEARNING_RATE_D, betas=(config.ADAM_BETA1, config.ADAM_BETA2)
         )
         self.m_optimizer = optim.Adam(
-            self.mapping_network.parameters(), lr=config.LEARNING_RATE_G, betas=(0.5, 0.9)
+            mapping_network.parameters(), lr=config.LEARNING_RATE_G, betas=(config.ADAM_BETA1, config.ADAM_BETA2)
         )
 
     def _gradient_penalty(self, real_data: torch.Tensor, fake_data: torch.Tensor) -> torch.Tensor:
