@@ -1,40 +1,47 @@
-# file: encdec_config.py (最终优化版)
-
+# encdec_config.py (已修改，移除冗余和硬编码的维度)
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List
 
-def get_date_columns() -> List[str]:
-    return ['Date']
-def get_id_columns() -> List[str]:
-    return ['Name']
+
 @dataclass
 class EncoderDecoderConfig:
-    DATE_COLUMNS: List[str] = field(default_factory=get_date_columns)
-    ID_COLUMNS: List[str] = field(default_factory=get_id_columns)
-    # --- TCN 核心架构参数 ---
-    TCN_CHANNELS: List[int] = field(default_factory=lambda: [64, 128, 256])
-    LATENT_DIM: int = 64
-    NUM_TOTAL_FEATURES: int = 70
+    """
+    (已重写)
+    本配置文件现在只包含与 CausalVAE 模型本身及其训练过程相关的超参数。
+    输入数据的维度等信息将在运行时从数据中动态获取。
+    """
 
-    # --- VAE 损失函数权重 ---
-    BETA_KL_FINAL: float = 1.0
+    # --- 1. 模型核心架构参数 ---
+    # TCN (时间卷积网络) 的通道数定义了网络的深度和宽度
+    TCN_CHANNELS: List[int] = field(default_factory=lambda: [64, 128, 256])
+    # 潜在空间的维度，即数据被压缩到的维度大小
+    LATENT_DIM: int = 64
+
+    # --- 2. VAE 损失函数权重 ---
+    # KL 散度项的权重，用于平衡重建损失和正则化
+    BETA_KL_FINAL: float = 2
+    # 因果关系损失项的权重
     GAMMA_CAUSAL: float = 1.0
 
-    # --- 周期性KL退火 (Cyclical Annealing) 参数 ---
-    # 我们将一个“工作-休假”周期的长度固定为50轮
+    # --- 3. 周期性KL退火 (Cyclical Annealing) 参数 ---
+    # KL 权重从0增长到 BETA_KL_FINAL 所需的周期长度（以 epoch 为单位）
     KL_ANNEALING_CYCLE_EPOCHS: int = 50
 
-    # --- 训练参数 ---
+    # --- 4. 训练过程参数 ---
     LEARNING_RATE: float = 0.001
     BATCH_SIZE: int = 32
-    NUM_EPOCHS: int = 300 # 保持一个较长的总轮数
+    NUM_EPOCHS: int = 300
     DROPOUT_RATE: float = 0.2
 
-    # --- 学习率调度器和早停法参数 (核心修改) ---
-    SCHEDULER_PATIENCE: int = 15 # 调度器的耐心可以适当增加
+    # --- 5. 学习率调度器和早停法参数 ---
+    # 当验证损失在 SCHEDULER_PATIENCE 个 epoch 内没有改善时，降低学习率
+    SCHEDULER_PATIENCE: int = 15
     SCHEDULER_FACTOR: float = 0.1
-    EARLY_STOPPING_PATIENCE: int = 50 # <-- 大幅增加早停的耐心
+    # 当验证损失在 EARLY_STOPPING_PATIENCE 个 epoch 内没有改善时，提前终止训练
+    EARLY_STOPPING_PATIENCE: int = 50
 
-    # --- 文件路径 ---
-    MODEL_SAVE_PATH: str = 'cvae_model.pkl' # 更新名称
+    # --- 6. 文件路径 ---
+    MODEL_SAVE_PATH: str = 'cvae_model.pkl'
     ENCODED_DATA_PATH: str = 'cvae_encoded_data.pkl'
+    # 用于保存数据维度信息的文件，将在 processor 中创建
+    FEATURE_DIMS_FILE: str = 'feature_dims.pkl'

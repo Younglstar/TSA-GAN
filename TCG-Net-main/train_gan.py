@@ -23,32 +23,37 @@ def plot_gan_loss_curves(history: list, save_path: str):
     """
     print("\n[附加步骤] 正在生成GAN损失曲线图...")
 
-    # 将损失历史转换为DataFrame
-    history_df = pd.DataFrame(history)
+    history_df = pd.DataFrame(history).dropna() # <-- 增加 .dropna() 清理无效数据
+
+    # --- 核心修改：增加防御性检查 ---
+    if history_df.empty or len(history_df) < 2:
+        print("  - 警告: 有效的历史记录过少，无法生成有意义的损失图。")
+        return
+    # --- 修改结束 ---
 
     plt.figure(figsize=(12, 8))
-
-    # 绘制 D_Loss, G_Loss, 和 Wasserstein Distance
     plt.plot(history_df['d_loss'], label='Discriminator Loss', color='red')
     plt.plot(history_df['g_loss'], label='Generator Loss', color='blue')
     plt.plot(history_df['wasserstein_dist'], label='Wasserstein Distance', color='green', linestyle='--')
-
     plt.title("GAN Training Losses and Wasserstein Distance per Epoch")
     plt.xlabel("Epoch")
     plt.ylabel("Loss / Distance")
     plt.legend()
     plt.grid(True)
 
-    # 寻找一个合理的y轴范围，避免因为初期的极端值导致后期曲线看不清
+    # --- 核心修改：更稳健地设置y轴范围 ---
     if len(history_df) > 10:
-        stable_g_loss = history_df['g_loss'][10:].median()
-        stable_d_loss = history_df['d_loss'][10:].median()
-        plt.ylim(stable_g_loss - 5, stable_d_loss + 5)
+        # 使用clip来限制极端值
+        q_low = history_df['g_loss'].quantile(0.1)
+        q_high = history_df['d_loss'].quantile(0.9)
+        plt.ylim(q_low - 2, q_high + 2)
+    # --- 修改结束 ---
 
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
     print(f"✅ GAN损失曲线图已保存至: {save_path}")
+
 
 
 
@@ -77,8 +82,16 @@ def train_gan(config: GANConfig):
 
     print("\n[步骤 1/4] 加载并准备数据...")
     encoded_data = load_encoded_data(config.ENCODED_DATA_PATH)
+
+    # --- 核心修改：增加数据有效性检查 ---
+    if np.isnan(encoded_data).any() or np.isinf(encoded_data).any():
+        raise ValueError("错误：加载的编码数据中包含 NaN 或 Inf 值！请检查 CausalVAE 阶段的输出。")
+    print("  - 数据有效性检查通过，未发现 NaN 或 Inf。")
+    # --- 修改结束 ---
+
     scaled_data, scaling_params = scale_data(encoded_data)
     dataloader = create_dataloader(scaled_data, config.BATCH_SIZE)
+    # ... (函数其余部分保持不变) ...
     with open('scaling_params_v2.pkl', 'wb') as f:
         pickle.dump(scaling_params, f)
 
