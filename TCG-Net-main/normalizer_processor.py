@@ -27,10 +27,8 @@ class DataNormalizationProcessor:
     def normalize_temporal_features(self, temporal_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
         """Normalize temporal numerical features"""
         normalized_temporal = {}
-        
         for visit_type, data in temporal_data.items():
             normalized_data = data.copy()
-            
             for feature in self.config.TEMPORAL_NUMERICAL_FEATURES:
                 if feature in data.columns:
                     normalizer = StochasticNormalizer(self.config)

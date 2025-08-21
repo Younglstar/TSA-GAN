@@ -3,8 +3,14 @@
 from dataclasses import dataclass, field
 from typing import List, Dict
 
+def get_date_columns() -> List[str]:
+    return ['Date']
+def get_id_columns() -> List[str]:
+    return ['Name']
 @dataclass
 class EncoderDecoderConfig:
+    DATE_COLUMNS: List[str] = field(default_factory=get_date_columns)
+    ID_COLUMNS: List[str] = field(default_factory=get_id_columns)
     # --- TCN 核心架构参数 ---
     TCN_CHANNELS: List[int] = field(default_factory=lambda: [64, 128, 256])
     LATENT_DIM: int = 64

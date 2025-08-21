@@ -11,7 +11,7 @@ def get_static_numerical_features() -> List[str]:
 
 def get_temporal_numerical_features() -> List[str]:
     return [
-        'DUREE_SEJOUR_HOUR'
+        'Open', 'High', 'Low', 'Close', 'Volume'
     ]
 
 @dataclass

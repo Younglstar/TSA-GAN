@@ -4,17 +4,13 @@ from typing import List, Dict
 
 def get_static_categorical_features() -> List[str]:
     return [
-        'SEXE',
-        'MARITAL_STATUS',
-        'GP_ONFILE'  # If this is categorical
+        'Name'
+# If this is categorical
     ]
 
 def get_temporal_categorical_features() -> List[str]:
     return [
-        'ETABLISSEMENT',
-        'UNITE',
-        'Diagnostic',
-        'RAISON_VISITE'
+
     ]
 
 @dataclass

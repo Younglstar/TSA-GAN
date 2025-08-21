@@ -61,15 +61,15 @@ def train(config: EncoderDecoderConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- 数据处理和模型初始化部分 (保持不变) ---
-    processor = DataProcessor(config);
-    combined_data = processor.process_data();
+    processor = DataProcessor(config)
+    combined_data = processor.process_data()
     processor.save_feature_dims()
-    input_dim = processor.feature_dims['input_dim'];
+    input_dim = processor.feature_dims['input_dim']
     sequence_length = processor.feature_dims['sequence_length']
     config.NUM_TOTAL_FEATURES = input_dim
-    data_tensor = torch.tensor(combined_data, dtype=torch.float32);
+    data_tensor = torch.tensor(combined_data, dtype=torch.float32)
     dataset = TensorDataset(data_tensor)
-    val_size = int(len(dataset) * 0.2);
+    val_size = int(len(dataset) * 0.2)
     train_size = len(dataset) - val_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, num_workers=4)

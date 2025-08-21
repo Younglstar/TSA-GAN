@@ -4,19 +4,19 @@ from typing import List
 
 def get_static_features() -> List[str]:
     return [
-        'DOSSIER_HASH', 'SEXE', 'MARITAL_STATUS', 
-        'GP_ONFILE', 'AGE_ARRIVEE'
+
     ]
 
 def get_temporal_features() -> List[str]:
     return [
-        'ETABLISSEMENT', 'UNITE', 'Diagnostic',
-        'RAISON_VISITE', 'DUREE_SEJOUR_HOUR'
+        'Name','Open', 'High', 'Low', 'Close', 'Volume'
     ]
 
 def get_date_columns() -> List[str]:
-    return ['YM_ADM', 'YM_ADM_Fol_Urg']
+    return ['Date']
 
+def get_id_columns() -> List[str]:
+    return ['Name']
 @dataclass
 class DataConfig:
     # Static features configuration
@@ -27,7 +27,9 @@ class DataConfig:
     
     # Date columns
     DATE_COLUMNS: List[str] = field(default_factory=get_date_columns)
+
+    ID_COLUMNS: List[str] = field(default_factory=get_id_columns)
     
     # File paths
-    INPUT_FILE: str = 'Emergency_Cohort_with_Followup_500_subject.csv'
+    INPUT_FILE: str = 'all_stocks_2006-01-01_to_2018-01-01.csv'
     PROCESSED_FILE: str = 'processed_data.pkl'
