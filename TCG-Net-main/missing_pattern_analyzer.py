@@ -30,7 +30,7 @@ class MissingPatternAnalyzer:
         # 2. 时序特征缺失率 (通用化)
         if not self.temporal_data.empty:
             # 确定哪些是元数据列，以便在计算中排除它们
-            meta_cols = self.config.ID_COLUMNS + self.config.DATE_COLUMNS
+            meta_cols = self.config.IDDATA_COLS + self.config.IDDATA_COLS
             # 只选择真正的特征列进行计算
             feature_cols = [col for col in self.temporal_data.columns if col not in meta_cols]
 
@@ -55,7 +55,7 @@ class MissingPatternAnalyzer:
         # 2. 时序模式 (通用化)
         if not self.temporal_data.empty:
             # 我们希望保留ID和日期作为索引，只对特征列生成模式
-            meta_cols = self.config.ID_COLUMNS + self.config.DATE_COLUMNS
+            meta_cols = self.config.IDDATA_COLS + self.config.IDDATA_COLS
             # 检查元数据列是否存在于DataFrame中
             existing_meta_cols = [col for col in meta_cols if col in self.temporal_data.columns]
 

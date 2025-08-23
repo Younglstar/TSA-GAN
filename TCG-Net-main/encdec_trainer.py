@@ -1,4 +1,4 @@
-# file: encdec_trainer.py (实现周期性KL退火)
+# encdec_trainer.py (修改后)
 
 import torch
 import torch.nn as nn
@@ -23,59 +23,84 @@ class EncoderDecoderTrainer:
         self.recon_mask_criterion = nn.BCELoss(reduction='mean')
         self.causal_criterion = nn.BCELoss(reduction='mean')
 
-        # file: encdec_trainer.py (只修改 _compute_loss 方法)
-
-        # file: encdec_trainer.py (只修改 _compute_loss 方法)
-
     def _compute_loss(self, inputs, mask, recon_data, recon_mask, mu, logvar, A_pred, current_epoch: int):
-            """
-            (已修改) 计算CausalVAE的复合损失函数，并实现周期性KL退火。
-            """
-            # ... (重构、KL、因果损失的计算保持不变) ...
-            recon_loss = self.recon_data_criterion(recon_data * mask, inputs * mask) + self.recon_mask_criterion(
-                recon_mask, mask)
-            kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            causal_target = torch.full_like(A_pred, 0.05);
-            causal_loss = self.causal_criterion(A_pred, causal_target)
+        """
+        (已修改) 计算CausalVAE的复合损失函数。
+        实现了带预热的周期性KL退火和Free Bits技术。
+        """
+        # 1. 重建损失
+        recon_loss = self.recon_data_criterion(recon_data * mask, inputs * mask) + self.recon_mask_criterion(
+            recon_mask, mask)
 
-            # --- 核心修改：使用新的周期长度参数来计算beta ---
-            cycle_length = self.config.KL_ANNEALING_CYCLE_EPOCHS
-            epoch_in_cycle = current_epoch % cycle_length
-            # 在每个周期的前半段，beta从0线性增长到1 (这里的逻辑也可以调整得更缓和)
-            beta = min(1.0, (epoch_in_cycle / (cycle_length / 2))) * self.config.BETA_KL_FINAL
+        # 2. KL 散度损失 (原始计算)
+        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-            # 4. 加权总损失
-            total_loss = recon_loss + beta * kld_loss + self.config.GAMMA_CAUSAL * causal_loss
+        # 3. 因果损失
+        causal_target = torch.full_like(A_pred, self.config.CAUSAL_TARGET_VALUE)  # <--- 修改：使用配置文件中的值
+        causal_loss = self.causal_criterion(A_pred, causal_target)
 
-            loss_dict = {'total_loss': total_loss.item(), 'recon_loss': recon_loss.item(),
-                         'kld_loss': kld_loss.item(), 'causal_loss': causal_loss.item(), 'current_beta': beta}
+        # 4. 计算KL权重 (beta)，采用带预热的平滑周期退火策略
+        # <--- 以下是全新的、更温和的beta计算逻辑 ---
+        warmup_epochs = self.config.KL_ANNEALING_WARMUP_EPOCHS
+        cycle_length = self.config.KL_ANNEALING_CYCLE_EPOCHS
 
-            return total_loss, loss_dict
+        if current_epoch < warmup_epochs:
+            beta = 0.0
+        else:
+            epoch_after_warmup = current_epoch - warmup_epochs
+            epoch_in_cycle = epoch_after_warmup % cycle_length
+            # 在整个周期内，beta从0平滑地线性增长到BETA_KL_FINAL
+            beta_ratio = epoch_in_cycle / cycle_length
+            beta = beta_ratio * self.config.BETA_KL_FINAL
 
+        # 5. 应用 "Free Bits" 技术
+        # <--- 新增：只有当KL损失超过阈值时，才对其施加惩罚 ---
+        free_bits_threshold = self.config.FREE_BITS_THRESHOLD
+        modified_kld_loss = torch.clamp(kld_loss, min=free_bits_threshold)
 
+        # 6. 加权总损失 (使用修正后的KL损失)
+        total_loss = recon_loss + beta * modified_kld_loss + self.config.GAMMA_CAUSAL * causal_loss
 
-    # ... (其余方法 _run_batch, train_epoch, validate, save, load 都保持不变) ...
-    # 为了简洁，此处省略，它们已经能够正确传递epoch参数
+        # 7. 记录各项损失 (注意：记录原始的kld_loss以方便监控其真实变化)
+        loss_dict = {'total_loss': total_loss.item(),
+                     'recon_loss': recon_loss.item(),
+                     'kld_loss': kld_loss.item(),  # 记录原始值
+                     'causal_loss': causal_loss.item(),
+                     'current_beta': beta}
+
+        return total_loss, loss_dict
+
     def _run_batch(self, batch: torch.Tensor, is_training: bool, current_epoch: int):
-        inputs = batch.to(self.device);
-        mask = (inputs != 0).float()
-        recon_data, recon_mask, mu, logvar, A_pred = self.model(inputs)
-        loss, loss_dict = self._compute_loss(inputs, mask, recon_data, recon_mask, mu, logvar, A_pred, current_epoch)
-        if is_training: self.optimizer.zero_grad(); loss.backward(); self.optimizer.step()
-        return loss_dict
+        inputs_clean = batch.to(self.device)  # 原始干净数据
+        # --- 新增：只在训练时加入噪声 ---
+        if is_training:
+            noise = torch.randn_like(inputs_clean) * 0.1  # 0.1是噪声标准差，可调
+            inputs_noisy = inputs_clean + noise
+        else:
+            inputs_noisy = inputs_clean  # 验证时不加噪声
 
+        mask = (inputs_clean != 0).float()
+        # 将带噪声的数据送入模型
+        recon_data, recon_mask, mu, logvar, A_pred = self.model(inputs_noisy)
+        # 用干净的数据计算损失
+        loss, loss_dict = self._compute_loss(inputs_clean, mask, recon_data, recon_mask, mu, logvar, A_pred,current_epoch)
+        if is_training:
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+        return loss_dict
     def train_epoch(self, dataloader: torch.utils.data.DataLoader, epoch: int):
-        self.model.train();
+        self.model.train()
         epoch_losses = []
-        for (batch,) in tqdm(dataloader, desc="训练中"):
+        for (batch,) in tqdm(dataloader, desc=f"训练中 (Epoch {epoch})"):
             epoch_losses.append(self._run_batch(batch, is_training=True, current_epoch=epoch))
         return {k: np.mean([d[k] for d in epoch_losses]) for k in epoch_losses[0]}
 
     def validate(self, dataloader: torch.utils.data.DataLoader, epoch: int):
-        self.model.eval();
+        self.model.eval()
         validation_losses = []
         with torch.no_grad():
-            for (batch,) in tqdm(dataloader, desc="验证中"):
+            for (batch,) in tqdm(dataloader, desc=f"验证中 (Epoch {epoch})"):
                 validation_losses.append(self._run_batch(batch, is_training=False, current_epoch=epoch))
         avg_losses = {k: np.mean([d[k] for d in validation_losses]) for k in validation_losses[0]}
         self.scheduler.step(avg_losses['total_loss'])

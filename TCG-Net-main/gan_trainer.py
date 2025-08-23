@@ -1,4 +1,4 @@
-# gan_trainer.py (修改后的版本)
+# file: gan_trainer.py (最终完整版)
 
 import torch
 import torch.nn as nn
@@ -11,7 +11,6 @@ from gan_models import Generator, Discriminator, MappingNetwork
 from gan_config import GANConfig
 
 class GANTrainer:
-    # ... (__init__ 和 _gradient_penalty 方法保持不变) ...
     def __init__(
             self,
             generator: Generator,
@@ -53,7 +52,6 @@ class GANTrainer:
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         return gradient_penalty
 
-
     def train_discriminator(self, real_data: torch.Tensor) -> Dict[str, float]:
         self.d_optimizer.zero_grad()
         batch_size = real_data.size(0)
@@ -68,11 +66,6 @@ class GANTrainer:
         gradient_penalty = self._gradient_penalty(real_data, fake_data)
         d_total_loss = d_loss + self.config.GRAD_PENALTY_WEIGHT * gradient_penalty
         d_total_loss.backward()
-
-        # --- 核心修改：在优化器更新前进行梯度裁剪 ---
-        torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
-        # --- 修改结束 ---
-
         self.d_optimizer.step()
 
         return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}
@@ -93,23 +86,16 @@ class GANTrainer:
         loss_diversity = -torch.mean(dist_g) / (torch.mean(dist_z) + 1e-8)
         g_total_loss = g_loss_adv + self.config.DIVERSITY_LAMBDA * loss_diversity
         g_total_loss.backward()
-
-        # --- 核心修改：在优化器更新前进行梯度裁剪 ---
-        torch.nn.utils.clip_grad_norm_(self.generator.parameters(), max_norm=1.0)
-        torch.nn.utils.clip_grad_norm_(self.mapping_network.parameters(), max_norm=1.0)
-        # --- 修改结束 ---
-
         self.g_optimizer.step()
         self.m_optimizer.step()
         return {'g_loss': g_total_loss.item(), 'g_loss_adv': g_loss_adv.item(), 'g_loss_div': loss_diversity.item()}
 
-    # ... (train_epoch 和其他方法保持不变) ...
+    # --- 关键：这里定义了 train_epoch 方法 ---
     def train_epoch(self, dataloader: torch.utils.data.DataLoader, epoch: int) -> Dict[str, float]:
         self.generator.train()
         self.discriminator.train()
         self.mapping_network.train()
         d_losses, g_losses, w_dists = [], [], []
-        last_g_loss = float('nan')
 
         pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Epoch {epoch + 1}")
         for i, batch in pbar:
@@ -119,13 +105,10 @@ class GANTrainer:
             w_dists.append(d_loss_dict['wasserstein_dist'])
             if (i + 1) % self.config.N_CRITIC == 0:
                 g_loss_dict = self.train_generator()
-                last_g_loss = g_loss_dict['g_loss']
-
-            if not np.isnan(last_g_loss):
-                g_losses.append(last_g_loss)
-            pbar.set_postfix({
+                g_losses.append(g_loss_dict['g_loss'])
+                pbar.set_postfix({
                     'D_loss': f"{np.mean(d_losses[-self.config.N_CRITIC:]):.4f}",
-                    'G_loss': f"{last_g_loss:.4f}",
+                    'G_loss': f"{g_losses[-1]:.4f}",
                     'W_dist': f"{np.mean(w_dists[-self.config.N_CRITIC:]):.4f}"
                 })
         return {
@@ -133,6 +116,8 @@ class GANTrainer:
             'g_loss': np.mean(g_losses) if g_losses else float('nan'),
             'wasserstein_dist': np.mean(w_dists)
         }
+    # --- train_epoch 方法定义结束 ---
+
     def generate_samples(self, num_samples: int) -> np.ndarray:
         self.generator.eval()
         self.mapping_network.eval()

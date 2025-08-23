@@ -19,7 +19,7 @@ class DataConfig:
 
     # 主体ID列：用于唯一标识每个独立个体（例如：患者ID，股票代码，用户ID）。
     # 这是关联同一个体的所有记录的关键。
-    SUBJECT_ID_COL: str = 'Name'
+    SUBJECT_ID_COL: str ='Country' #'Name'
 
     # 时间戳列：表示时间序列数据中的时间点或序列顺序。
     TIMESTAMP_COL: str = 'Date'
@@ -30,26 +30,31 @@ class DataConfig:
 
     # 静态特征 (Static Features): 对于同一个主体，这些特征值是固定不变的。
     STATIC_NUMERICAL_FEATURES: List[str] = field(default_factory=list)
-    STATIC_CATEGORICAL_FEATURES: List[str] = field(default_factory=list)
+    STATIC_CATEGORICAL_FEATURES: List[str] = field(default_factory=lambda:['Country'])
 
     # 时序特征 (Temporal Features): 这些特征值会随时间戳变化。
     TEMPORAL_NUMERICAL_FEATURES: List[str] = field(
-        default_factory=lambda: ['Open', 'High', 'Low', 'Close', 'Volume']
+        default_factory=lambda:['Confirmed','Recovered','Deaths'] #['Open', 'High', 'Low', 'Close', 'Volume']
     )
     TEMPORAL_CATEGORICAL_FEATURES: List[str] = field(default_factory=list)
     # 注意：在您的例子中 'Name' 是 ID，而不是时序特征，所以我已将其移至 SUBJECT_ID_COL。
 
     # --- 3. 文件路径定义 ---
-    INPUT_FILE: str = 'all_stocks_2006-01-01_to_2018-01-01.csv'
+    INPUT_FILE: str = 'countries-aggregated.csv'
     PROCESSED_FILE: str = 'processed_data.pkl'
 
     # --- 4. 辅助属性 (通常无需修改) ---
     # 这些属性会根据上面的定义自动生成组合列表，方便代码调用。
 
     @property
-    def METADATA_COLS(self) -> List[str]:
+    def IDDATA_COLS(self) -> List[str]:
         """返回所有用于识别和排序的元数据列的列表。"""
-        return [self.SUBJECT_ID_COL, self.TIMESTAMP_COL]
+        return [self.SUBJECT_ID_COL]
+
+    @property
+    def TIMEDATA_COLS(self) -> List[str]:
+        """返回所有用于识别和排序的元数据列的列表。"""
+        return [self.TIMESTAMP_COL]
 
     @property
     def STATIC_FEATURES(self) -> List[str]:

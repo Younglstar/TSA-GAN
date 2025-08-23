@@ -30,7 +30,6 @@ def plot_gan_loss_curves(history: list, save_path: str):
         print("  - 警告: 有效的历史记录过少，无法生成有意义的损失图。")
         return
     # --- 修改结束 ---
-
     plt.figure(figsize=(12, 8))
     plt.plot(history_df['d_loss'], label='Discriminator Loss', color='red')
     plt.plot(history_df['g_loss'], label='Generator Loss', color='blue')
@@ -53,9 +52,6 @@ def plot_gan_loss_curves(history: list, save_path: str):
     plt.savefig(save_path)
     plt.close()
     print(f"✅ GAN损失曲线图已保存至: {save_path}")
-
-
-
 
 
 def setup_models(input_dim: int, config: GANConfig) -> tuple[Generator, Discriminator, MappingNetwork]:
@@ -91,6 +87,7 @@ def train_gan(config: GANConfig):
 
     scaled_data, scaling_params = scale_data(encoded_data)
     dataloader = create_dataloader(scaled_data, config.BATCH_SIZE)
+    print("数据集大小:", len(scaled_data), "Batch size:", config.BATCH_SIZE, "迭代步数:", len(dataloader))
     # ... (函数其余部分保持不变) ...
     with open('scaling_params_v2.pkl', 'wb') as f:
         pickle.dump(scaling_params, f)
@@ -141,6 +138,7 @@ def generate_synthetic_data(trainer: GANTrainer, config: GANConfig, scaling_para
 
 def main():
     """运行完整GAN v2流程的主函数"""
+
     config = GANConfig()
     trainer, scaling_params = train_gan(config)
     generate_synthetic_data(trainer, config, scaling_params)

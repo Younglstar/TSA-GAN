@@ -23,8 +23,8 @@ class DataLoader:
 
         # 验证所有在 config 中定义的列都存在于文件中
         required_cols = list(set(
-            self.config.ID_COLUMNS +
-            self.config.DATE_COLUMNS +
+            self.config.IDDATA_COLS +
+            self.config.TIMEDATA_COLS +
             self.config.STATIC_FEATURES +
             self.config.TEMPORAL_FEATURES
         ))
@@ -33,7 +33,7 @@ class DataLoader:
             raise ValueError(f"输入文件中缺少以下必要的列: {missing_cols}")
 
         # 转换日期列为 datetime 对象
-        for date_col in self.config.DATE_COLUMNS:
+        for date_col in self.config.TIMEDATA_COLS:
             self.data[date_col] = pd.to_datetime(self.data[date_col])
 
         print("数据加载和日期转换成功。")
@@ -41,10 +41,10 @@ class DataLoader:
 
     def _get_subject_id_col(self) -> str:
         """获取并验证主体ID列。"""
-        if not self.config.ID_COLUMNS or len(self.config.ID_COLUMNS) == 0:
+        if not self.config.IDDATA_COLS or len(self.config.IDDATA_COLS) == 0:
             raise ValueError("配置错误: `ID_COLUMNS` 必须在 config.py 中定义且不能为空。")
         # 假设列表中的第一个ID列是主要的主体标识符
-        return self.config.ID_COLUMNS[0]
+        return self.config.IDDATA_COLS[0]
 
     def split_static_temporal(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -82,18 +82,18 @@ class DataLoader:
         # 从时序特征列表中排除掉元数据列（ID和Date），避免重复
         temporal_feature_cols = [
             feat for feat in self.config.TEMPORAL_FEATURES
-            if feat not in self.config.ID_COLUMNS and feat not in self.config.DATE_COLUMNS
+            if feat not in self.config.IDDATA_COLS and feat not in self.config.IDDATA_COLS
         ]
 
         # 时序数据应包含元数据列和特征列
-        temporal_cols = self.config.ID_COLUMNS + self.config.DATE_COLUMNS + temporal_feature_cols
+        temporal_cols = self.config.IDDATA_COLS + self.config.TIMEDATA_COLS + temporal_feature_cols
         print(f"提取时序特征: {temporal_feature_cols}")
 
         self.temporal_data = self.data[temporal_cols].copy()
 
         # 按主体和时间排序，确保时序的正确性
-        if self.config.DATE_COLUMNS:
-            sort_by_cols = [subject_id, self.config.DATE_COLUMNS[0]]
+        if self.config.TIMEDATA_COLS:
+            sort_by_cols = [subject_id, self.config.TIMEDATA_COLS[0]]
             print(f"正在按 {sort_by_cols} 对时序数据进行排序...")
             self.temporal_data = self.temporal_data.sort_values(by=sort_by_cols).reset_index(drop=True)
 

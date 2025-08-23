@@ -45,7 +45,7 @@ def main():
         "train_encdec.py",  # 4. 训练CausalVAE模型，生成 causal_vae_model_best.pkl 和 encoded data
         "train_gan.py",  # 5. 训练高级GAN模型，生成 gan_final_model.pkl 和 synthetic data
         "final_decoder.py",  # 6. 解码GAN生成的潜在数据，生成 final_synthetic_data.pkl
-        "final_comprarison.py"  # 7. 生成最终的、全面的对比分析报告
+        "final_comparison.py"  # 7. 生成最终的、全面的对比分析报告
     ]
 
     # --- 按顺序执行所有步骤 ---

@@ -26,7 +26,7 @@ def main():
     missing_patterns = analyzer.generate_missing_patterns()
 
     # 4. 打印基本统计信息 (已通用化)
-    subject_id_col = config.ID_COLUMNS[0] if config.ID_COLUMNS else 'subject'
+    subject_id_col = config.IDDATA_COLS[0] if config.IDDATA_COLS else 'subject'
     print("\n--- 基本统计信息 ---")
     print(f"独立主体 ({subject_id_col}) 的数量: {len(static_data)}")
 

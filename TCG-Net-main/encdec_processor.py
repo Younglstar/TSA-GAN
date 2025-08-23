@@ -68,7 +68,7 @@ class DataProcessor:
         # 计算最大序列长度
         max_seq_len = grouped.size().max()
         # 从列名中排除元数据列，计算纯特征数量
-        temporal_feature_cols = [col for col in temporal_data.columns if col not in self.data_config.METADATA_COLS]
+        temporal_feature_cols = [col for col in temporal_data.columns if col not in self.data_config.TIMEDATA_COLS+self.data_config.IDDATA_COLS]
         temporal_dim = len(temporal_feature_cols)
 
         print(f"  - 数据中的最大序列长度为: {max_seq_len}")
