@@ -177,7 +177,7 @@ class GoldStandardComparator:
             sns.heatmap(diff_corr, ax=ax3, cmap='YlOrRd', vmin=0, vmax=1).set_title(
                 f'Absolute Correlation Differences\nMean Diff: {np.mean(diff_corr):.3f}')
             plt.tight_layout()
-            plt.savefig(os.path.join(self.output_dir, 'correlation_analysis.png'))
+            plt.savefig(os.path.join(save_dir, 'correlation_analysis.png'))
             plt.close()
 
             plt.figure(figsize=(8, 8))

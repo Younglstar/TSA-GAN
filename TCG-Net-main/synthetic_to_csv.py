@@ -42,7 +42,7 @@ class SyntheticDataConverter:
             self.original_df = pd.read_csv(self.data_conf.INPUT_FILE)
             print("所有文件加载成功！")
         except FileNotFoundError as e:
-            print(f"\n❌ 文件未找到错误: {e}");
+            print(f"\n❌ 文件未找到错误: {e}")
             raise
 
     def _load_causal_vae_model(self) -> CausalVAE:
@@ -75,8 +75,8 @@ class SyntheticDataConverter:
         else:
             model.load_state_dict(saved_state_dict)
 
-        model.to(self.device);
-        model.eval();
+        model.to(self.device)
+        model.eval()
         return model
 
     def _decode_latent_data(self) -> np.ndarray:

@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 from typing import List
+from gan_config import GANConfig
 
 
 # --- 新增模块 (保持不变) ---
@@ -92,7 +93,7 @@ class Generator(nn.Module):
         return x
 
 # --- 判别器保持不变 ---
-class Discriminator(nn.Module):
+'''class Discriminator(nn.Module):
     def __init__(self, input_dim: int, hidden_dims: List[int], dropout_rate: float):
         super().__init__()
         layers = []
@@ -105,4 +106,28 @@ class Discriminator(nn.Module):
         self.model = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        return self.model(x)'''
+class Discriminator(nn.Module):
+    def __init__(self, input_dim: int, hidden_dims, config: GANConfig):
+        super().__init__()
+        layers = []
+        last = input_dim
+        for h in hidden_dims:
+            linear = nn.Linear(last, h)
+            if getattr(config, "USE_SPECTRAL_NORM", True):
+                linear = nn.utils.spectral_norm(linear)
+            layers += [linear, nn.LeakyReLU(0.2, inplace=True)]
+            last = h
+
+        # 把“特征提取器”和“最后一层”分开，便于 feature matching
+        self.feature_extractor = nn.Sequential(*layers)
+        self.final_linear = nn.Linear(last, 1)  # WGAN critic 输出
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        # 返回最后一层线性层之前的“判别器特征”
+        return self.feature_extractor(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat = self.feature_extractor(x)
+        out = self.final_linear(feat)
+        return out

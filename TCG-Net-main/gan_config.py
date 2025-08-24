@@ -18,20 +18,28 @@ class GANConfig:
     MAPPING_HIDDEN_DIM: int = 128
 
     # --- 多样性损失权重 (可以适当提高) ---
-    DIVERSITY_LAMBDA: float = 0.1
+    DIVERSITY_LAMBDA: float = 0.05
 
     # --- 训练参数 (核心修改) ---
     # 恢复一个相对平衡的学习率
-    LEARNING_RATE_G: float = 0.0002
-    LEARNING_RATE_D: float = 0.0001
+    LEARNING_RATE_G: float = 0.00003
+    LEARNING_RATE_D: float = 0.000075
     # 调整Adam优化器的beta1参数，这在GAN训练中很常见，可以增加稳定性
-    ADAM_BETA1: float = 0.5
+    ADAM_BETA1: float = 0.0
     ADAM_BETA2: float = 0.9
 
     BATCH_SIZE: int = 32
-    NUM_EPOCHS: int = 2000
+    NUM_EPOCHS: int = 5000
     N_CRITIC: int = 5
-    GRAD_PENALTY_WEIGHT: float = 15.0
+    GRAD_PENALTY_WEIGHT: float = 10.0
+    # 定义要使用的增强策略，用逗号分隔。可选: 'noise', 'cutout'
+    AUGMENTATION_POLICY = "noise,cutout,mixup"
+
+    # 'noise' 策略的参数：噪声的标准差
+    AUGMENT_NOISE_STD: float = 0.01
+
+    # 'cutout' 策略的参数：遮挡窗口大小占总序列长度的比例
+    AUGMENT_CUTOUT_RATIO: float = 0.05
 
     # ... 其他参数 ...
     DROPOUT_RATE: float = 0.2
@@ -39,3 +47,21 @@ class GANConfig:
     MODEL_SAVE_PATH: str = 'gan_final_model.pkl'
     SYNTHETIC_DATA_PATH: str = 'synthetic_final_data.pkl'
     NUM_SYNTHETIC_SAMPLES: int = 1000
+
+    INSTANCE_NOISE_STD_INIT: float = 0.02   # 判别器输入“实例噪声”起始标准差
+    INSTANCE_NOISE_STD_FINAL: float = 0.0   # 线性衰减到 0
+    MIXUP_PROB: float = 0.1                # real/fake 小概率mixup，WGAN下的“软标签”替代
+    MIXUP_ALPHA: float = 0.05                # mixup强度
+
+    # —— 生成器正则 ——
+    FM_LOSS_WEIGHT: float = 0.5             # Feature Matching loss 权重
+    MOMENT_MATCHING_WEIGHT: float = 0.2     # 矩匹配（含偏度峰度）权重
+    MOMENT_ORDERS: List[int] = field(default_factory=lambda: [1, 2, 3, 4])  # 对齐到四阶
+
+    # —— 判别器稳定性 ——
+    USE_SPECTRAL_NORM: bool = True          # 判别器线性层加谱归一化
+
+    # —— (可选) DP-SGD差分隐私 ——
+    DP_ENABLE: bool = False                 # 先默认False，确认性能后再开
+    DP_MAX_GRAD_NORM: float = 1.0
+    DP_NOISE_MULTIPLIER: float = 0.8
