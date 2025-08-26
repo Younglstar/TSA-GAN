@@ -1,76 +1,97 @@
-# Differentiable Augmentation for Data-Efficient GAN Training
-# Shengyu Zhao, Zhijian Liu, Ji Lin, Jun-Yan Zhu, and Song Han
-# https://arxiv.org/pdf/2006.10738
-
+# file: debug_opacus_fixed.py
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
+import torch.optim as optim
+from opacus import PrivacyEngine
+
+print("--- 开始Opacus最小可复现示例(修复版) ---")
+
+BATCH_SIZE = 16
+INPUT_DIM = 64
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DP_ENABLE = True
+DP_NOISE_MULTIPLIER = 1.0
+DP_MAX_GRAD_NORM = 1.2
+GRAD_PENALTY_WEIGHT = 10.0
+
+class SafeDiscriminator(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.act1 = nn.ReLU(inplace=False)
+        self.fc2 = nn.Linear(128, 1)
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = self.fc1(x)
+        x = self.act1(x)
+        x = self.fc2(x)
+        return x
+
+def gradient_penalty(discriminator, real_data, fake_data, dp_enabled, device):
+    bsz = real_data.size(0)
+    alpha = torch.rand(bsz, 1, device=device).expand_as(real_data)
+    interpolates = (alpha * real_data + (1 - alpha) * fake_data).requires_grad_(True)
+
+    # 🚨 用未包装的模型避免 Opacus hook 干扰
+    if dp_enabled and hasattr(discriminator, "_module"):
+        d_interpolates = discriminator._module(interpolates)
+    else:
+        d_interpolates = discriminator(interpolates)
+
+    grad = torch.autograd.grad(
+        outputs=d_interpolates,
+        inputs=interpolates,
+        grad_outputs=torch.ones_like(d_interpolates),
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True,
+    )[0]
+    grad = grad.view(bsz, -1)
+    gp = ((grad.norm(2, dim=1) - 1) ** 2).mean()
+    return gp
 
 
-def DiffAugment(x, policy='', channels_first=True):
-    if policy:
-        if not channels_first:
-            x = x.permute(0, 3, 1, 2)
-        for p in policy.split(','):
-            for f in AUGMENT_FNS[p]:
-                x = f(x)
-        if not channels_first:
-            x = x.permute(0, 2, 3, 1)
-        x = x.contiguous()
-    return x
+try:
+    print("\n--- 步骤A: 初始化模型和优化器 ---")
+    D = SafeDiscriminator(INPUT_DIM).to(DEVICE)
+    d_opt = optim.Adam(D.parameters(), lr=1e-4)
 
+    real_data = torch.randn(BATCH_SIZE, INPUT_DIM, device=DEVICE)
+    fake_data = torch.randn(BATCH_SIZE, INPUT_DIM, device=DEVICE)
 
-def rand_brightness(x):
-    x = x + (torch.rand(x.size(0), 1, 1, 1, dtype=x.dtype, device=x.device) - 0.5)
-    return x
+    print("--- 步骤B: 附加Opacus隐私引擎 ---")
+    if DP_ENABLE:
+        dummy_ds = torch.utils.data.TensorDataset(real_data)  # 只是占位
+        dummy_dl = torch.utils.data.DataLoader(dummy_ds, batch_size=BATCH_SIZE)
+        pe = PrivacyEngine()
+        D, d_opt, dummy_dl = pe.make_private(
+            module=D,
+            optimizer=d_opt,
+            data_loader=dummy_dl,
+            noise_multiplier=DP_NOISE_MULTIPLIER,
+            max_grad_norm=DP_MAX_GRAD_NORM,
+        )
+        print("Opacus附加成功。")
 
+    print("--- 步骤C: 前向(不拼接) ---")
+    d_opt.zero_grad(set_to_none=True)
 
-def rand_saturation(x):
-    x_mean = x.mean(dim=1, keepdim=True)
-    x = (x - x_mean) * (torch.rand(x.size(0), 1, 1, 1, dtype=x.dtype, device=x.device) * 2) + x_mean
-    return x
+    d_real = D(real_data)   # [16, 1]
+    d_fake = D(fake_data)   # [16, 1]
+    d_loss = d_fake.mean() - d_real.mean()
 
+    print("--- 步骤D: 计算梯度惩罚(同一模型/同一batch维度) ---")
+    gp = gradient_penalty(D, real_data, fake_data,True, device=DEVICE)
 
-def rand_contrast(x):
-    x_mean = x.mean(dim=[1, 2, 3], keepdim=True)
-    x = (x - x_mean) * (torch.rand(x.size(0), 1, 1, 1, dtype=x.dtype, device=x.device) + 0.5) + x_mean
-    return x
+    print("--- 步骤E: 反向传播 ---")
+    total = d_loss + GRAD_PENALTY_WEIGHT * gp
+    total.backward()
 
+    print("--- 步骤F: step ---")
+    d_opt.step()
+    print("\n✅ 修复版最小示例成功运行！")
 
-def rand_translation(x, ratio=0.125):
-    shift_x, shift_y = int(x.size(2) * ratio + 0.5), int(x.size(3) * ratio + 0.5)
-    translation_x = torch.randint(-shift_x, shift_x + 1, size=[x.size(0), 1, 1], device=x.device)
-    translation_y = torch.randint(-shift_y, shift_y + 1, size=[x.size(0), 1, 1], device=x.device)
-    grid_batch, grid_x, grid_y = torch.meshgrid(
-        torch.arange(x.size(0), dtype=torch.long, device=x.device),
-        torch.arange(x.size(2), dtype=torch.long, device=x.device),
-        torch.arange(x.size(3), dtype=torch.long, device=x.device),
-    )
-    grid_x = torch.clamp(grid_x + translation_x + 1, 0, x.size(2) + 1)
-    grid_y = torch.clamp(grid_y + translation_y + 1, 0, x.size(3) + 1)
-    x_pad = F.pad(x, [1, 1, 1, 1, 0, 0, 0, 0])
-    x = x_pad.permute(0, 2, 3, 1).contiguous()[grid_batch, grid_x, grid_y].permute(0, 3, 1, 2).contiguous()
-    return x
-
-
-def rand_cutout(x, ratio=0.5):
-    cutout_size = int(x.size(2) * ratio + 0.5), int(x.size(3) * ratio + 0.5)
-    offset_x = torch.randint(0, x.size(2) + (1 - cutout_size[0] % 2), size=[x.size(0), 1, 1], device=x.device)
-    offset_y = torch.randint(0, x.size(3) + (1 - cutout_size[1] % 2), size=[x.size(0), 1, 1], device=x.device)
-    grid_batch, grid_x, grid_y = torch.meshgrid(
-        torch.arange(x.size(0), dtype=torch.long, device=x.device),
-        torch.arange(cutout_size[0], dtype=torch.long, device=x.device),
-        torch.arange(cutout_size[1], dtype=torch.long, device=x.device),
-    )
-    grid_x = torch.clamp(grid_x + offset_x - cutout_size[0] // 2, min=0, max=x.size(2) - 1)
-    grid_y = torch.clamp(grid_y + offset_y - cutout_size[1] // 2, min=0, max=x.size(3) - 1)
-    mask = torch.ones(x.size(0), x.size(2), x.size(3), dtype=x.dtype, device=x.device)
-    mask[grid_batch, grid_x, grid_y] = 0
-    x = x * mask.unsqueeze(1)
-    return x
-
-
-AUGMENT_FNS = {
-    'color': [rand_brightness, rand_saturation, rand_contrast],
-    'translation': [rand_translation],
-    'cutout': [rand_cutout],
-}
+except Exception as e:
+    import traceback
+    print("\n❌ 运行失败")
+    traceback.print_exc()

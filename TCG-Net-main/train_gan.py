@@ -1,20 +1,15 @@
 # file: train_gan.py (修改后的完整版本)
+import numpy as np
 import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 import pickle
 from gan_models import Generator, Discriminator, MappingNetwork
-from gan_data import load_encoded_data, create_dataloader
+from gan_data import load_encoded_data, create_dataloader,TimeSeriesDataset
 from gan_config import GANConfig
-from gan_trainer import GANTrainer
+from gan_trainer import GANTrainer,EarlyStopping
 
-# ========== 可选导入差分隐私 ==========
-try:
-    from opacus import PrivacyEngine
-    OPACUS_AVAILABLE = True
-except ImportError:
-    print("⚠️ 未安装 opacus，差分隐私训练将被禁用。可运行: pip install opacus")
-    OPACUS_AVAILABLE = False
+
 
 # ========== 加载数据 ==========
 
@@ -46,7 +41,7 @@ def plot_gan_loss_curves(history: list, save_path: str):
         # 使用clip来限制极端值
         q_low = history_df['g_loss'].quantile(0.1)
         q_high = history_df['d_loss'].quantile(0.9)
-        plt.ylim(q_low - 2, q_high + 2)
+        plt.ylim( - 10, + 10)
     # --- 修改结束 ---
 
     plt.tight_layout()
@@ -56,20 +51,31 @@ def plot_gan_loss_curves(history: list, save_path: str):
 
 # ========== 主训练函数 ==========
 def main():
+
+    # --- 核心修改：在这里执行离线数据增强 ---
+    # 1. 加载原始的编码后数据
     config = GANConfig()
-    data = load_encoded_data(config.ENCODED_DATA_PATH)
-    dataloader = create_dataloader(data, batch_size=config.BATCH_SIZE)
-    # ✅ 正确写法
+    original_data = load_encoded_data(config.ENCODED_DATA_PATH)
+    print(f"原始数据样本量: {len(original_data)}")
+    dataset = TimeSeriesDataset(original_data,
+                                augment_factor=config.AUGMENTATION_FACTOR,
+                                noise_std=config.AUGMENT_NOISE_STD)
+    print(f"增强数据样本量: {len(dataset)}")
+
+
     generator = Generator(
         w_dim=config.W_DIM,
         output_dim=config.INPUT_DIM,
+        hidden_dims=config.GENERATOR_HIDDEN_DIMS
     )
 
+
     discriminator = Discriminator(
-        input_dim=config.INPUT_DIM,
-        hidden_dims=config.DISCRIMINATOR_HIDDEN_DIMS,
-        config=config,
-    )
+         input_dim=config.INPUT_DIM,
+         hidden_dims=config.DISCRIMINATOR_HIDDEN_DIMS,
+         config=config,
+     )
+
 
     mapping_network = MappingNetwork(
         z_dim=config.NOISE_DIM,
@@ -77,27 +83,20 @@ def main():
         hidden_layers=config.MAPPING_HIDDEN_LAYERS,
         hidden_dim=config.MAPPING_HIDDEN_DIM,
     )
+    trainer = GANTrainer(
+        generator,
+        discriminator,
+        mapping_network,
+        config,
+        dataset=dataset # <--- 修改：传递 dataset
+    )
+    early_stopper = EarlyStopping(patience=100, min_delta=1e-3, monitor="wasserstein_dist")
 
-    trainer = GANTrainer(generator, discriminator, mapping_network, config)
-
-    # ========== 差分隐私 ==========
-    if OPACUS_AVAILABLE and getattr(config, "USE_DP", False):
-        print("\n🔐 使用差分隐私优化器 (DP-SGD)...")
-        privacy_engine = PrivacyEngine()
-
-        # 用 DP-SGD 替换判别器的优化器
-        trainer.discriminator, trainer.d_optimizer, dataloader = privacy_engine.make_private(
-            module=trainer.discriminator,
-            optimizer=trainer.d_optimizer,
-            data_loader=dataloader,
-            noise_multiplier=config.DP_NOISE_MULTIPLIER,
-            max_grad_norm=config.DP_MAX_GRAD_NORM,
-        )
 
     print("\n🚀 开始训练...")
     gan_history = []
     for epoch in range(config.NUM_EPOCHS):
-        losses = trainer.train_epoch(dataloader, epoch)
+        losses = trainer.train_epoch(epoch)
         gan_history.append(losses)
         print(
             f"Epoch {epoch+1}/{config.NUM_EPOCHS} 总结 | "

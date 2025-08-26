@@ -365,24 +365,45 @@ class GoldStandardComparator:
         print("✅ 隐私保护分析完成。")
 
     def _run_membership_inference_attack(self, real_train, real_holdout, save_dir):
-        """执行成员推断攻击 (MIA)"""
+        """
+        (已修正) 执行成员推断攻击 (MIA)，以评估合成数据的隐私保护能力。
+        """
         print("  -> 正在进行成员推断攻击 (MIA) 模拟...")
         try:
-            # 准备攻击模型的数据集
-            # 正样本(标签1): 来自GAN训练集的数据
-            # 负样本(标签0): GAN从未见过的数据
-            attack_X = np.concatenate((real_train, real_holdout))
-            attack_y = np.concatenate((np.ones(len(real_train)), np.zeros(len(real_holdout))))
+            # ======================= 核心修改开始 =======================
 
-            # 训练一个攻击模型来区分
+            # 准备攻击模型的数据集
+            # 正样本 (标签1): 真正参与了GAN训练的原始数据成员 (real_train)
+            # 负样本 (标签0): 由GAN生成的、不对应任何真实个体的合成数据 (self.synthetic_encoded)
+
+            n_real_train = len(real_train)
+            n_synthetic = len(self.synthetic_encoded)
+
+            # 为了平衡数据集，我们让正负样本数量一致
+            # 如果合成数据比真实训练数据多，我们就从中随机抽样
+            if n_synthetic > n_real_train:
+                indices = np.random.permutation(n_synthetic)[:n_real_train]
+                synthetic_samples_for_attack = self.synthetic_encoded[indices]
+            else:
+                synthetic_samples_for_attack = self.synthetic_encoded
+
+            attack_X = np.concatenate((real_train[:len(synthetic_samples_for_attack)], synthetic_samples_for_attack))
+            attack_y = np.concatenate(
+                (np.ones(len(synthetic_samples_for_attack)), np.zeros(len(synthetic_samples_for_attack))))
+
+            # 训练一个攻击模型来区分“真实训练成员”与“合成样本”
             attack_model = LogisticRegression(max_iter=1000, random_state=42).fit(attack_X, attack_y)
             attack_accuracy = accuracy_score(attack_y, attack_model.predict(attack_X))
 
             report = f"\n--- 成员推断攻击 (MIA) 报告 ---\n\n"
             report += f"攻击模型准确率: {attack_accuracy:.4f}\n\n"
             report += f"解读:\n"
-            report += f" - 准确率 ≈ 0.5: 理想情况。攻击者无法区分训练成员和非成员，隐私保护效果好。\n"
-            report += f" - 准确率 -> 1.0: 危险信号！模型泄漏了其训练集成员的身份信息，隐私风险高。\n"
+            report += f" - 该准确率反映了攻击者区分“真实训练数据”和“GAN生成数据”的能力。\n"
+            report += f" - 准确率 ≈ 0.5 (随机猜测): 理想情况。说明合成数据在统计上与真实数据无法区分，隐私保护效果好。\n"
+            report += f" - 准确率 -> 1.0: 危险信号。说明合成数据与真实数据存在明显差异，可能是模式崩溃的迹象，或者未能很好地学习真实分布。\n"
+
+            # ======================== 核心修改结束 ========================
+
             print(report)
             self.report_content += report
             with open(os.path.join(save_dir, '1_privacy_mia_report.txt'), 'w') as f:

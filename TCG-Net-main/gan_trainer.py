@@ -9,6 +9,46 @@ from opacus import PrivacyEngine
 from tqdm import tqdm
 from gan_models import Generator, Discriminator, MappingNetwork
 from gan_config import GANConfig
+from gan_data import create_dataloader
+
+# file: gan_trainer.py (最终完整版增加 early stopping)
+
+class EarlyStopping:
+    def __init__(self, patience=50, min_delta=1e-4, monitor="wasserstein_dist"):
+        """
+        :param patience: 允许多少个epoch没有改善
+        :param min_delta: 最小改善幅度
+        :param monitor: 监控的指标 (例如 "wasserstein_dist" 或 "g_loss")
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.monitor = monitor
+        self.best_value = None
+        self.counter = 0
+        self.should_stop = False
+
+    def step(self, metrics: Dict[str, float]):
+        current_value = metrics.get(self.monitor, None)
+        if current_value is None:
+            return False
+
+        if self.best_value is None:
+            self.best_value = current_value
+            return False
+
+        # 监控 Wasserstein Distance → 越小越好
+        improvement = self.best_value - current_value
+        if improvement > self.min_delta:
+            self.best_value = current_value
+            self.counter = 0
+        else:
+            self.counter += 1
+
+        if self.counter >= self.patience:
+            self.should_stop = True
+            print(f"\n⏹️ EarlyStopping: {self.monitor} 在 {self.patience} 个epoch内没有改善，停止训练。")
+            return True
+        return False
 
 class GANTrainer:
     def __init__(
@@ -17,6 +57,7 @@ class GANTrainer:
             discriminator: Discriminator,
             mapping_network: MappingNetwork,
             config: GANConfig,
+            dataset: torch.utils.data.Dataset = None,
             device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     ):
         self.generator = generator.to(device)
@@ -25,7 +66,6 @@ class GANTrainer:
         self.config = config
         self.device = device
 
-        # --- 核心修改：使用新的beta参数 ---
         self.g_optimizer = optim.Adam(
             generator.parameters(), lr=config.LEARNING_RATE_G, betas=(config.ADAM_BETA1, config.ADAM_BETA2)
         )
@@ -35,27 +75,41 @@ class GANTrainer:
         self.m_optimizer = optim.Adam(
             mapping_network.parameters(), lr=config.LEARNING_RATE_G, betas=(config.ADAM_BETA1, config.ADAM_BETA2)
         )
-        # 在 __init__ 末尾，添加如下（保留你原有的优化器）：
-        self.epoch = 0  # 用于实例噪声的线性衰减
 
-        # (可选) 差分隐私
+        self.epoch = 0  # 用于实例噪声衰减
         self.dp_enabled = False
+        if dataset is None:
+            raise ValueError("GANTrainer 需要一个 Dataset 对象进行初始化")
+        dataloader = create_dataloader(dataset, batch_size=self.config.BATCH_SIZE, shuffle=True)
+        # ----------------- 差分隐私 (DP-SGD) -----------------
         if getattr(config, "DP_ENABLE", False):
             try:
-
                 self.privacy_engine = PrivacyEngine()
-                self.discriminator, self.d_optimizer, self.train_dataloader = \
-                    self.privacy_engine.make_private_with_epsilon(
-                        module=self.discriminator,
-                        optimizer=self.d_optimizer,
-                        data_loader=None,  # 这里为None时按sigma配置，不走dataloader会退化到 make_private
-                        noise_multiplier=config.DP_NOISE_MULTIPLIER,
-                        max_grad_norm=config.DP_MAX_GRAD_NORM,
-                    )
-                self.dp_enabled = True
-                print("[DP] Opacus 已启用差分隐私（判别器）")
+                self.discriminator, self.d_optimizer, self.dataloader = self.privacy_engine.make_private(
+                    module=self.discriminator,  # 使用 self.discriminator
+                    optimizer=self.d_optimizer,
+                    data_loader=dataloader,  # 使用这里创建的 dataloader
+                    noise_multiplier=config.DP_NOISE_MULTIPLIER,
+                    max_grad_norm=config.DP_MAX_GRAD_NORM,
+                )
+                self.dp_enabled = True  # <-- 标记DP已启用
+                print(f"[DP] 已启用差分隐私。")
+                print(f"DEBUG: 隐私引擎处理后的dataloader长度为: {len(self.dataloader)}")
             except Exception as e:
-                print(f"[DP] 未启用差分隐私（{e}），将以非DP模式训练")
+                print(f"[DP] 启用失败：{e}，回退到非DP模式")
+                self.dataloader = dataloader  # DP失败时，使用原始的dataloader
+        else:
+            # 如果不启用DP，就直接使用创建的dataloader
+            self.dataloader = dataloader
+
+    def get_privacy_spent(self):
+        """
+        训练过程中查询已消耗的隐私预算
+        """
+        if self.dp_enabled:
+            eps = self.privacy_engine.get_epsilon(self.config.DP_TARGET_DELTA)
+            return eps
+        return None
 
     def _instance_noise_std(self) -> float:
         s0 = self.config.INSTANCE_NOISE_STD_INIT
@@ -106,7 +160,12 @@ class GANTrainer:
         batch_size = real_data.size(0)
         alpha = torch.rand(batch_size, 1, device=self.device)
         interpolates = (alpha * real_data + (1 - alpha) * fake_data).requires_grad_(True)
-        d_interpolates = self.discriminator(interpolates)
+        if self.dp_enabled:
+            unwrapped_discriminator = self.discriminator._module
+        else:
+            unwrapped_discriminator = self.discriminator
+
+        d_interpolates = unwrapped_discriminator(interpolates)
         gradients = torch.autograd.grad(
             outputs=d_interpolates,
             inputs=interpolates,
@@ -116,25 +175,10 @@ class GANTrainer:
         )[0]
         gradients = gradients.view(batch_size, -1)
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+
         return gradient_penalty
 
-    '''def train_discriminator(self, real_data: torch.Tensor) -> Dict[str, float]:
-        self.d_optimizer.zero_grad()
-        batch_size = real_data.size(0)
-        noise = torch.randn(batch_size, self.config.NOISE_DIM, device=self.device)
-        with torch.no_grad():
-            w = self.mapping_network(noise)
-            fake_data = self.generator(w)
 
-        d_real = self.discriminator(real_data)
-        d_fake = self.discriminator(fake_data.detach())
-        d_loss = torch.mean(d_fake) - torch.mean(d_real)
-        gradient_penalty = self._gradient_penalty(real_data, fake_data)
-        d_total_loss = d_loss + self.config.GRAD_PENALTY_WEIGHT * gradient_penalty
-        d_total_loss.backward()
-        self.d_optimizer.step()
-
-        return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}'''
 
     def _augment_timeseries(self, data: torch.Tensor) -> torch.Tensor:
         """
@@ -177,8 +221,49 @@ class GANTrainer:
         else:
             return augmented_data
 
+        # file: gan_trainer.py
+
     def train_discriminator(self, real_data: torch.Tensor) -> Dict[str, float]:
+            self.d_optimizer.zero_grad()
+
+            batch_size = real_data.size(0)
+
+            with torch.no_grad():
+                noise = torch.randn(batch_size, self.config.NOISE_DIM, device=self.device)
+                w = self.mapping_network(noise)
+                fake_data = self.generator(w)
+
+            real_aug = self._apply_instance_noise(real_data)
+            fake_aug = self._apply_instance_noise(fake_data)
+            real_aug, fake_aug = self._maybe_mixup(real_aug, fake_aug)
+
+            d_real = self.discriminator(real_aug)
+            d_fake = self.discriminator(fake_aug.detach())
+
+            # WGAN原始损失
+            d_loss = torch.mean(d_fake) - torch.mean(d_real)
+
+            # --- 诊断性修改：当DP启用时，暂时禁用梯度惩罚 ---
+            if self.dp_enabled:
+                # 在DP模式下，不计算梯度惩罚
+                d_total_loss = d_loss
+                # 创建一个假的gp值用于日志记录，或者直接忽略
+                gradient_penalty = torch.tensor(0.0)
+            else:
+                # 在非DP模式下，正常计算梯度惩罚
+                gradient_penalty = self._gradient_penalty(real_data, fake_data)
+                d_total_loss = d_loss + self.config.GRAD_PENALTY_WEIGHT * gradient_penalty
+            # --- 修改结束 ---
+
+            d_total_loss.backward()
+            self.d_optimizer.step()
+
+            self._cached_real = real_data.detach()
+            # 返回的wasserstein_dist不受影响，因为它基于d_loss
+            return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}
+    '''def train_discriminator(self, real_data: torch.Tensor) -> Dict[str, float]:
         self.d_optimizer.zero_grad()
+
         batch_size = real_data.size(0)
 
         with torch.no_grad():
@@ -197,18 +282,16 @@ class GANTrainer:
         # WGAN critic
         d_real = self.discriminator(real_aug)
         d_fake = self.discriminator(fake_aug.detach())
+        print('111111')
         d_loss = torch.mean(d_fake) - torch.mean(d_real)
-
         # 梯度惩罚仍在原始数据上计算
         gradient_penalty = self._gradient_penalty(real_data, fake_data)
         d_total_loss = d_loss + self.config.GRAD_PENALTY_WEIGHT * gradient_penalty
         d_total_loss.backward()
         self.d_optimizer.step()
-
         # 缓存一个最近的real batch，供生成器feature matching使用
         self._cached_real = real_data.detach()
-
-        return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}
+        return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}'''
 
     def _disc_features(self, x: torch.Tensor) -> torch.Tensor:
         # 兼容不同写法：优先用 extract_features；没有则直接返回判别器输出（退化为0影响很小）
@@ -220,8 +303,19 @@ class GANTrainer:
     def train_generator(self) -> Dict[str, float]:
         self.g_optimizer.zero_grad()
         self.m_optimizer.zero_grad()
+        self.d_optimizer.zero_grad()
 
-        B = self.config.BATCH_SIZE
+        '''B = self.config.BATCH_SIZE
+        noise_g = torch.randn(B, self.config.NOISE_DIM, device=self.device)
+        w_g = self.mapping_network(noise_g)
+        fake_g = self.generator(w_g)'''
+        if not hasattr(self, "_cached_real") or self._cached_real is None:
+            # 如果没有缓存，则无法进行训练，可以跳过或报错
+            return {'g_loss': float('nan')}
+
+        B = self._cached_real.size(0)  # <-- 解决方案：动态获取当前真实批次的大小
+        # --- 修改结束 ---
+
         noise_g = torch.randn(B, self.config.NOISE_DIM, device=self.device)
         w_g = self.mapping_network(noise_g)
         fake_g = self.generator(w_g)
@@ -277,16 +371,19 @@ class GANTrainer:
         }
 
     # --- 关键：这里定义了 train_epoch 方法 ---
-    def train_epoch(self, dataloader: torch.utils.data.DataLoader, epoch: int) -> Dict[str, float]:
+    def train_epoch(self, epoch: int) -> Dict[str, float]:
         self.epoch = epoch
         self.generator.train()
         self.discriminator.train()
         self.mapping_network.train()
         d_losses, g_losses, w_dists = [], [], []
-
-        pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Epoch {epoch + 1}")
+        pbar = tqdm(enumerate(self.dataloader), total=len(self.dataloader), desc=f"Epoch {epoch + 1}")
         for i, batch in pbar:
-            real_data = batch.to(self.device)
+            # 兼容 DPDataLoader 输出 (x, y) 或普通 DataLoader 输出 x
+            if isinstance(batch, (list, tuple)):
+                real_data = batch[0].to(self.device)  # 只取数据部分
+            else:
+                real_data = batch.to(self.device)
             d_loss_dict = self.train_discriminator(real_data)
             d_losses.append(d_loss_dict['d_loss'])
             w_dists.append(d_loss_dict['wasserstein_dist'])
