@@ -10,7 +10,7 @@ from tqdm import tqdm
 from gan_models import Generator, Discriminator, MappingNetwork
 from gan_config import GANConfig
 from gan_data import create_dataloader
-
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 # file: gan_trainer.py (最终完整版增加 early stopping)
 
 class EarlyStopping:
@@ -75,7 +75,27 @@ class GANTrainer:
         self.m_optimizer = optim.Adam(
             mapping_network.parameters(), lr=config.LEARNING_RATE_G, betas=(config.ADAM_BETA1, config.ADAM_BETA2)
         )
-
+        # ----------------- 学习率调度器 -----------------
+        # StepLR → CosineAnnealingWarmRestarts
+        self.g_scheduler = CosineAnnealingWarmRestarts(
+            self.g_optimizer,
+            T_0=config.LR_DECAY_EPOCHS,  # 第一次周期长度
+            T_mult=config.LR_MULT,  # 每次重启周期扩大倍率
+            eta_min=config.LR_MIN  # 最低学习率
+        )
+        self.d_scheduler = CosineAnnealingWarmRestarts(
+            self.d_optimizer,
+            T_0=config.LR_DECAY_EPOCHS,
+            T_mult=config.LR_MULT,
+            eta_min=config.LR_MIN
+        )
+        self.m_scheduler = CosineAnnealingWarmRestarts(
+            self.m_optimizer,
+            T_0=config.LR_DECAY_EPOCHS,
+            T_mult=config.LR_MULT,
+            eta_min=config.LR_MIN
+        )
+        # -------------------------------------------------
         self.epoch = 0  # 用于实例噪声衰减
         self.dp_enabled = False
         if dataset is None:
@@ -261,37 +281,6 @@ class GANTrainer:
             self._cached_real = real_data.detach()
             # 返回的wasserstein_dist不受影响，因为它基于d_loss
             return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}
-    '''def train_discriminator(self, real_data: torch.Tensor) -> Dict[str, float]:
-        self.d_optimizer.zero_grad()
-
-        batch_size = real_data.size(0)
-
-        with torch.no_grad():
-            noise = torch.randn(batch_size, self.config.NOISE_DIM, device=self.device)
-            w = self.mapping_network(noise)
-            fake_data = self.generator(w)
-
-        # 实例噪声
-        real_aug = self._apply_instance_noise(real_data)
-        fake_aug = self._apply_instance_noise(fake_data)
-
-        # 轻量 mixup（可抑制过拟合，弱化属性推断）
-        real_aug, fake_aug = self._maybe_mixup(real_aug, fake_aug)
-
-
-        # WGAN critic
-        d_real = self.discriminator(real_aug)
-        d_fake = self.discriminator(fake_aug.detach())
-        print('111111')
-        d_loss = torch.mean(d_fake) - torch.mean(d_real)
-        # 梯度惩罚仍在原始数据上计算
-        gradient_penalty = self._gradient_penalty(real_data, fake_data)
-        d_total_loss = d_loss + self.config.GRAD_PENALTY_WEIGHT * gradient_penalty
-        d_total_loss.backward()
-        self.d_optimizer.step()
-        # 缓存一个最近的real batch，供生成器feature matching使用
-        self._cached_real = real_data.detach()
-        return {'d_loss': d_total_loss.item(), 'wasserstein_dist': -d_loss.item()}'''
 
     def _disc_features(self, x: torch.Tensor) -> torch.Tensor:
         # 兼容不同写法：优先用 extract_features；没有则直接返回判别器输出（退化为0影响很小）
@@ -395,6 +384,13 @@ class GANTrainer:
                     'G_loss': f"{g_losses[-1]:.4f}",
                     'W_dist': f"{np.mean(w_dists[-self.config.N_CRITIC:]):.4f}"
                 })
+
+        # ----------------- 每个 epoch 后更新 scheduler -----------------
+        epoch_progress = epoch + 1  # 这里也可以用 epoch + i/len(self.dataloader) 更精细
+        self.g_scheduler.step(epoch_progress)
+        self.d_scheduler.step(epoch_progress)
+        self.m_scheduler.step(epoch_progress)
+        # ---------------------------------------------------------------
         return {
             'd_loss': np.mean(d_losses),
             'g_loss': np.mean(g_losses) if g_losses else float('nan'),

@@ -65,13 +65,13 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, input_dim: int, hidden_dims, config: GANConfig):
+    def __init__(self, input_dim: int, hidden_dims):
         super().__init__()
         layers = []
         last = input_dim
         for h in hidden_dims:
             linear = nn.Linear(last, h)
-            if getattr(config, "USE_SPECTRAL_NORM", True):
+            if getattr(GANConfig, "USE_SPECTRAL_NORM", True):
                 linear = nn.utils.spectral_norm(linear)
             layers += [linear, nn.LeakyReLU(0.2, inplace=False)]
             last = h

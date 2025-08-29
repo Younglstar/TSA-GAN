@@ -3,17 +3,20 @@
 import numpy as np
 import pandas as pd
 import pickle
-import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.model_selection import train_test_split
+from pgmpy.estimators import PC
+import networkx as nx
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.metrics import roc_auc_score, f1_score, accuracy_score
-from sklearn.neighbors import NearestNeighbors
+from sklearn.metrics import roc_auc_score, roc_curve, auc
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
 from scipy import stats
 from scipy.stats import ks_2samp
 import os
@@ -54,6 +57,25 @@ class GoldStandardComparator:
             print(f"\n❌ 文件未找到错误: {e}")
             raise
 
+        # ========= 🔹 绘制 ROC & AUC 函数 =========
+        def _plot_auc_curve(self, y_true, y_score, title="ROC Curve"):
+            """
+            绘制ROC曲线并显示AUC
+            """
+            fpr, tpr, _ = roc_curve(y_true, y_score)
+            roc_auc = auc(fpr, tpr)
+
+            plt.figure(figsize=(6, 6))
+            plt.plot(fpr, tpr, color="blue", lw=2, label=f"ROC curve (AUC = {roc_auc:.4f})")
+            plt.plot([0, 1], [0, 1], color="gray", lw=1, linestyle="--")
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.title(title)
+            plt.legend(loc="lower right")
+            plt.grid(True)
+            plt.show()
+
+            return roc_auc
     # ==============================================================================
     # == 第一部分：数据保真度 (Fidelity) 分析 (保持高水准) ==
     # ==============================================================================
@@ -412,38 +434,178 @@ class GoldStandardComparator:
             print(f"    - 成员推断攻击出错: {e}")
 
     def _run_attribute_inference_attack(self, real_train, save_dir):
-        """执行属性推断攻击"""
-        print("  -> 正在进行属性推断攻击模拟...")
+        print("  -> 正在进行全面的属性推断攻击模拟 (遍历所有特征)...")
         try:
-            # 任务：根据其他特征，推断第一个特征
-            X_synth_train, y_synth_train = self.synthetic_encoded[:, 1:], self.synthetic_encoded[:, 0] > np.median(
-                self.synthetic_encoded[:, 0])
-            X_real_attack, y_real_attack_true = real_train[:, 1:], real_train[:, 0] > np.median(real_train[:, 0])
+            # 如果特征数少于2，则无法进行此攻击
+            if self.n_features < 2:
+                print("    - 特征数少于2，跳过属性推断攻击。")
+                report = "\n--- 属性推断攻击报告 ---\n\n特征数少于2，无法执行此攻击。\n"
+                self.report_content += report
+                with open(os.path.join(save_dir, '2_privacy_attribute_inference_report.txt'), 'w') as f:
+                    f.write(report)
+                return
 
-            # 在合成数据上训练一个模型
-            inference_model = RandomForestClassifier(random_state=42).fit(X_synth_train, y_synth_train)
+            attack_results = {}
 
-            # 用这个模型去猜测真实训练集样本的属性
-            y_real_attack_pred = inference_model.predict(X_real_attack)
-            attack_accuracy = accuracy_score(y_real_attack_true, y_real_attack_pred)
+            # 使用tqdm来显示循环进度
+            for target_feature_idx in tqdm(range(self.n_features), desc="    - 攻击进度"):
+                # 1. 准备数据：将当前特征作为目标(y)，其余作为输入(X)
+                # 使用np.delete可以方便地移除目标特征列
+                X_synth_train = np.delete(self.synthetic_encoded, target_feature_idx, axis=1)
+                X_real_attack = np.delete(real_train, target_feature_idx, axis=1)
 
-            report = f"\n--- 属性推断攻击报告 ---\n\n"
-            report += f"攻击模型准确率: {attack_accuracy:.4f}\n\n"
-            report += f"解读:\n"
-            report += f" - 准确率代表了攻击者根据合成数据模型，猜中真实训练成员敏感属性的能力。\n"
-            report += f" - 准确率越低，说明模型学到的特征关系越泛化，隐私保护效果越好。\n"
+                # 将目标特征二值化（大于中位数为1，否则为0）作为分类任务
+                y_synth_train = self.synthetic_encoded[:, target_feature_idx] > np.median(
+                    self.synthetic_encoded[:, target_feature_idx])
+                y_real_attack_true = real_train[:, target_feature_idx] > np.median(real_train[:, target_feature_idx])
+
+                # 2. 在合成数据上训练一个攻击模型
+                # 使用LightGBM，它通常比随机森林更快且性能相当
+                inference_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
+                inference_model.fit(X_synth_train, y_synth_train)
+
+                # 3. 用这个模型去猜测真实训练集样本的属性
+                y_real_attack_pred = inference_model.predict(X_real_attack)
+                attack_accuracy = accuracy_score(y_real_attack_true, y_real_attack_pred)
+
+                # 4. 记录结果
+                attack_results[f'Feature_{target_feature_idx}'] = attack_accuracy
+
+            # 5. 生成详细的报告
+            results_df = pd.DataFrame.from_dict(attack_results, orient='index', columns=['Attack Accuracy'])
+            mean_accuracy = results_df['Attack Accuracy'].mean()
+
+            report = "\n--- 全面属性推断攻击报告 ---\n\n"
+            report += "对每个特征作为敏感属性进行推断的攻击准确率:\n"
+            report += results_df.to_string()
+            report += f"\n\n平均攻击准确率: {mean_accuracy:.4f}\n\n"
+            report += "解读:\n"
+            report += " - 该报告展示了攻击者利用合成数据模型，分别猜测真实训练数据中每一个特征的能力。\n"
+            report += " - 准确率代表了攻击成功的概率。随机猜测的基准是0.5。\n"
+            report += " - 整体准确率越接近0.5，说明模型学到的特征关系越泛化，隐私保护效果越好。\n"
+            report += " - 如果某个特征的攻击准确率远高于0.5，则表明该特征存在较高的泄露风险。\n"
+
             print(report)
             self.report_content += report
             with open(os.path.join(save_dir, '2_privacy_attribute_inference_report.txt'), 'w') as f:
                 f.write(report)
+
+            # 6. 生成可视化图表
+            plt.figure(figsize=(14, 7))
+            results_df.sort_values('Attack Accuracy').plot(kind='barh', figsize=(12, max(8, self.n_features * 0.3)))
+            plt.axvline(x=0.5, color='r', linestyle='--', label='Random Guess (0.5)')
+            plt.xlabel('Attack Accuracy')
+            plt.ylabel('Target Feature')
+            plt.title('Attribute Inference Attack Accuracy per Feature')
+            plt.legend()
+            plt.grid(axis='x', linestyle=':')
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_dir, '3_privacy_attribute_inference_plot.png'))
+            plt.close()
+
         except Exception as e:
             print(f"    - 属性推断攻击出错: {e}")
 
+    # ==============================================================================
+    # == 第四部分：因果关系 (Causality) 分析 (全新) ==
+    # ==============================================================================
+    def analyze_causality(self):
+        """(全新) 运行因果发现与比较分析"""
+        print("\n--- 4. 开始因果关系 (Causality) 分析 ---")
+        save_dir = os.path.join(self.output_dir, '4_causality')
+        os.makedirs(save_dir, exist_ok=True)
+
+        report = "\n--- 因果关系分析报告 ---\n\n错误: 缺少必要的库 (cdt, networkx)，无法执行此分析。\n"
+        with open(os.path.join(save_dir, 'causal_discovery_report.txt'), 'w') as f:
+            f.write(report)
+
+
+        self._run_causal_discovery_analysis(save_dir)
+        print("✅ 因果关系分析完成。")
+        return
+    def _run_causal_discovery_analysis(self, save_dir):
+            """
+            (全新) 使用PC算法发现因果图，并使用结构汉明距离(SHD)进行比较。
+            """
+            print("  -> 正在运行因果发现 (PC算法)...")
+            try:
+                # 将numpy数组转换为pandas DataFrame
+                real_df = pd.DataFrame(self.real_encoded, columns=[f'F{i}' for i in range(self.n_features)])
+                synthetic_df = pd.DataFrame(self.synthetic_encoded, columns=[f'F{i}' for i in range(self.n_features)])
+
+                # 1. 从真实数据中发现因果图
+                print("    - 正在从真实数据推断因果图...")
+                pc_real = PC(data=real_df)
+                # variant='stable' 是一种更可靠的PC算法版本
+                real_model = pc_real.estimate(variant='stable', significance_level=0.01)
+                real_graph = nx.DiGraph(real_model.edges())
+
+                # 2. 从合成数据中发现因果图
+                print("    - 正在从合成数据推断因果图...")
+                pc_synth = PC(data=synthetic_df)
+                synth_model = pc_synth.estimate(variant='stable', significance_level=0.01)
+                synthetic_graph = nx.DiGraph(synth_model.edges())
+
+                # 3. 比较两个图的结构 - 手动计算SHD
+                # 结构汉明距离 (SHD): 将一个图转换为另一个图所需的边操作（增/删/反转）次数。
+                shd = 0
+                # 检查在real_graph中的每条边
+                for u, v in real_graph.edges():
+                    if not synthetic_graph.has_edge(u, v):
+                        if synthetic_graph.has_edge(v, u):  # 边的方向反了
+                            shd += 1
+                        else:  # 缺少边
+                            shd += 1
+                # 检查在synthetic_graph中的每条边，看是否是多出来的
+                for u, v in synthetic_graph.edges():
+                    if not real_graph.has_edge(u, v) and not real_graph.has_edge(v, u):  # 多出来的边
+                        shd += 1
+
+                # 4. 生成报告 (与之前相同)
+                report = "\n--- 因果发现与比较报告 ---\n\n"
+                report += "方法: pgmpy PC因果发现算法 + 结构汉明距离 (SHD)\n"
+                report += "重要假设: 本分析假设数据中不存在未观测到的混杂因素（因果充足性），且因果关系是无环的。\n\n"
+                report += f"结构汉明距离 (SHD): {shd}\n\n"
+                report += "解读:\n"
+                report += f" - SHD衡量了合成数据因果图与真实数据因果图的结构差异。\n"
+                report += f" - SHD = 0: 理想情况。说明合成数据完美地复现了从真实数据中推断出的因果结构。\n"
+                report += f" - SHD > 0: 值越低，说明因果结构保留得越好。\n"
+
+                print(report)
+                self.report_content += report
+                with open(os.path.join(save_dir, '1_causal_discovery_report.txt'), 'w') as f:
+                    f.write(report)
+
+                # 5. 可视化因果图 (与之前相同)
+                fig, axes = plt.subplots(1, 2, figsize=(20, 9))
+                fig.suptitle('Causal Graphs Comparison (using pgmpy)', fontsize=16)
+
+                # 确保所有节点都出现在图中，即使它们是孤立的
+                all_nodes = list(real_df.columns)
+                real_graph.add_nodes_from(all_nodes)
+                synthetic_graph.add_nodes_from(all_nodes)
+
+                pos = nx.circular_layout(real_graph)  # 使用相同的布局以便比较
+                nx.draw(real_graph, pos=pos, ax=axes[0], with_labels=True, node_color='skyblue', edge_color='gray',
+                        node_size=2000, font_size=10, arrows=True)
+                axes[0].set_title('Discovered Causal Graph from REAL Data')
+                nx.draw(synthetic_graph, pos=pos, ax=axes[1], with_labels=True, node_color='lightcoral',
+                        edge_color='gray', node_size=2000, font_size=10, arrows=True)
+                axes[1].set_title(f'Discovered Causal Graph from SYNTHETIC Data\nSHD = {shd}')
+
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                plt.savefig(os.path.join(save_dir, '2_causal_graphs_comparison.png'))
+                plt.close()
+
+            except Exception as e:
+                print(f"    - 因果分析出错: {e}")
+
     def run_all_analyses(self):
-        """运行所有分析"""
+        """运行所有分析
         self.analyze_fidelity()
         self.analyze_utility()
-        self.analyze_privacy()
+        self.analyze_privacy()"""
+        self.analyze_causality()
         print(f"\n--- 🚀 黄金标准评估已完成！所有报告已生成在目录: {self.output_dir}/ ---")
 
 
