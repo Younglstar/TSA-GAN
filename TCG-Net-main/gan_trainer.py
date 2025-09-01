@@ -79,7 +79,7 @@ class GANTrainer:
         # StepLR → CosineAnnealingWarmRestarts
         self.g_scheduler = CosineAnnealingWarmRestarts(
             self.g_optimizer,
-            T_0=config.LR_DECAY_EPOCHS,  # 第一次周期长度
+            T_0=config.LR_DECAY_EPOCHS_G,  # 第一次周期长度
             T_mult=config.LR_MULT,  # 每次重启周期扩大倍率
             eta_min=config.LR_MIN  # 最低学习率
         )
@@ -164,7 +164,7 @@ class GANTrainer:
         kurt = (xc ** 4).mean(dim=0) / (var ** 2)
         return mean, var, skew, kurt
 
-    def _moment_matching_loss(self, real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
+    '''def _moment_matching_loss(self, real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
         orders = set(getattr(self.config, "MOMENT_ORDERS", [1, 2, 3, 4]))
         rm, rv, rs, rk = self._batch_moments(real)
         fm, fv, fs, fk = self._batch_moments(fake)
@@ -174,6 +174,27 @@ class GANTrainer:
         if 2 in orders: loss = loss + (rv - fv).pow(2).mean()
         if 3 in orders: loss = loss + (rs - fs).pow(2).mean()
         if 4 in orders: loss = loss + (rk - fk).pow(2).mean()
+        return loss'''
+
+    def _moment_matching_loss(self, real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
+        orders = set(getattr(self.config, "MOMENT_ORDERS", [1, 2, 3, 4]))
+        rm, rv, rs, rk = self._batch_moments(real)
+        fm, fv, fs, fk = self._batch_moments(fake)
+
+        loss = 0.0
+        eps = 1e-6
+
+        if 1 in orders:
+            # 均值差异 / 实际方差的尺度 → 无量纲
+            loss += ((rm - fm) ** 2 / (rv + eps)).mean()
+        if 2 in orders:
+            # 方差差异 / 方差^2 尺度
+            loss += ((rv - fv) ** 2 / (rv ** 2 + eps)).mean()
+        if 3 in orders:
+            loss += ((rs - fs) ** 2).mean()
+        if 4 in orders:
+            loss += ((rk - fk) ** 2).mean()
+
         return loss
 
     def _gradient_penalty(self, real_data: torch.Tensor, fake_data: torch.Tensor) -> torch.Tensor:
@@ -357,6 +378,8 @@ class GANTrainer:
             'g_loss': g_total_loss.item(),
             'g_loss_adv': g_loss_adv.item(),
             'g_loss_div': loss_div.item(),
+            'g_loss_fm': fm_loss.item(),
+            'g_loss_mm': mm_loss.item(),
         }
 
     # --- 关键：这里定义了 train_epoch 方法 ---
@@ -378,6 +401,7 @@ class GANTrainer:
             w_dists.append(d_loss_dict['wasserstein_dist'])
             if (i + 1) % self.config.N_CRITIC == 0:
                 g_loss_dict = self.train_generator()
+                print(g_loss_dict)
                 g_losses.append(g_loss_dict['g_loss'])
                 pbar.set_postfix({
                     'D_loss': f"{np.mean(d_losses[-self.config.N_CRITIC:]):.4f}",

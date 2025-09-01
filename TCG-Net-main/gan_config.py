@@ -20,14 +20,15 @@ class GANConfig:
     # --- 多样性损失权重 (可以适当提高) ---
     DIVERSITY_LAMBDA: float = 0.5
     FM_LOSS_WEIGHT: float = 1            # Feature Matching loss 权重
-    MOMENT_MATCHING_WEIGHT: float = 2.0     # 矩匹配（含偏度峰度）权重
-    MOMENT_ORDERS: List[int] = field(default_factory=lambda: [1, 2, 3])  # 对齐到四阶
+    MOMENT_MATCHING_WEIGHT: float = 0.1     # 矩匹配（含偏度峰度）权重
+    MOMENT_ORDERS: List[int] = field(default_factory=lambda: [1, 2, 3,4])  # 对齐到四阶
 
     # --- 训练参数 (核心修改) ---
     # 恢复一个相对平衡的学习率
-    LEARNING_RATE_G: float = 0.00001
-    LEARNING_RATE_D: float = 0.00002
+    LEARNING_RATE_G: float = 0.0001
+    LEARNING_RATE_D: float = 0.0002
     LR_DECAY_EPOCHS: int = 100
+    LR_DECAY_EPOCHS_G: int = 600
     LR_DECAY_FACTOR = 0.5  # 学习率衰减倍率
     LR_MULT = 2   # 每次重启周期扩大倍率
     LR_MIN = 1e-6  # 最低学习率
@@ -37,8 +38,8 @@ class GANConfig:
 
 
     BATCH_SIZE: int = 128
-    NUM_EPOCHS: int = 12000
-    N_CRITIC: int = 3
+    NUM_EPOCHS: int = 10000
+    N_CRITIC: int = 1
     GRAD_PENALTY_WEIGHT: float = 10.0
 
     # 定义要使用的增强策略，用逗号分隔。可选: 'noise', 'cutout'
@@ -56,10 +57,10 @@ class GANConfig:
     MIXUP_ALPHA: float = 0.2                # mixup强度
 
     # —— 判别器稳定性 ——
-    USE_SPECTRAL_NORM: bool = False         # 判别器线性层加谱归一化
+    USE_SPECTRAL_NORM: bool = True         # 判别器线性层加谱归一化
 
     # —— (可选) DP-SGD差分隐私 ——
-    DP_ENABLE: bool = True               # 先默认False，确认性能后再开
+    DP_ENABLE: bool = False               # 先默认False，确认性能后再开
     DP_MAX_GRAD_NORM: float = 1.0
     DP_NOISE_MULTIPLIER: float = 0.8
     DP_TARGET_EPSILON: float = 10.0
@@ -69,4 +70,3 @@ class GANConfig:
     MODEL_SAVE_PATH: str = 'gan_final_model.pkl'
     SYNTHETIC_DATA_PATH: str = 'synthetic_final_data.pkl'
     NUM_SYNTHETIC_SAMPLES: int = 1000
-

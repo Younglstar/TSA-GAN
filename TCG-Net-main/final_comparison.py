@@ -9,6 +9,7 @@ from sklearn.manifold import TSNE
 from sklearn.model_selection import train_test_split
 from pgmpy.estimators import PC
 import networkx as nx
+from scipy.spatial.distance import cdist
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -94,7 +95,7 @@ class GoldStandardComparator:
         # ... (这部分的所有函数 _plot_... 和 _generate_... 与之前一样，此处省略) ...
         print("✅ 数据保真度分析完成。")
 
-    def plot_autocorrelation_analysis(self,save_dir):
+    def plot_autocorrelation_analysis(self, save_dir, matplotlib=None):
         """
         (新增) 比较真实数据和合成数据的自相关性，以评估时序动态。
         我们只选择前几个特征进行可视化。
@@ -384,6 +385,7 @@ class GoldStandardComparator:
 
         self._run_membership_inference_attack(real_train, real_holdout, save_dir)
         self._run_attribute_inference_attack(real_train, save_dir)
+        self._run_reidentification_attack(real_train, real_holdout, save_dir)
         print("✅ 隐私保护分析完成。")
 
     def _run_membership_inference_attack(self, real_train, real_holdout, save_dir):
@@ -506,6 +508,65 @@ class GoldStandardComparator:
         except Exception as e:
             print(f"    - 属性推断攻击出错: {e}")
 
+    def _run_reidentification_attack(self, real_train, real_holdout, save_dir):
+        """
+        (全新) 执行基于最近邻距离的重识别攻击模拟。
+        """
+        print("  -> 正在进行重识别攻击 (最近邻) 模拟...")
+        try:
+            # 1. 计算每个真实训练集成员到合成数据集的最近邻距离
+            # cdist 计算两个点集之间的距离矩阵
+            dist_matrix_train = cdist(real_train, self.synthetic_encoded, metric='euclidean')
+            dists_train = dist_matrix_train.min(axis=1)
+
+            # 2. 计算每个真实留出集成员到合成数据集的最近邻距离
+            dist_matrix_holdout = cdist(real_holdout, self.synthetic_encoded, metric='euclidean')
+            dists_holdout = dist_matrix_holdout.min(axis=1)
+
+            # 3. 使用 ROC-AUC 分数来量化可区分性
+            # 将距离拼接起来，标签1代表训练成员，0代表非成员
+            all_dists = np.concatenate([dists_train, dists_holdout])
+            all_labels = np.concatenate([np.ones_like(dists_train), np.zeros_like(dists_holdout)])
+
+            # 注意：距离越小，是成员的概率越高。因此我们需要使用负距离作为分数。
+            auc_score = roc_auc_score(all_labels, -all_dists)
+
+            # 4. 生成报告
+            report = f"\n--- 重识别攻击 (Re-identification) 报告 ---\n\n"
+            report += f"方法: 基于最近邻距离的成员与非成员可区分性分析。\n"
+            report += f"重识别风险分数 (AUC): {auc_score:.4f}\n\n"
+            report += "解读:\n"
+            report += " - 该分数衡量了攻击者仅通过“与合成数据的接近程度”来区分真实训练成员和非成员的能力。\n"
+            report += " - AUC ≈ 0.5: 理想情况，隐私保护效果好。说明GAN生成的泛化数据很好，没有“死记硬背”训练样本。\n"
+            report += " - AUC -> 1.0: 危险信号，存在严重的重识别风险。说明合成数据中有一些点与真实训练成员异常接近，模型可能发生了记忆或过拟合。\n"
+
+            print(report)
+            self.report_content += report
+            with open(os.path.join(save_dir, '4_privacy_reidentification_report.txt'), 'w') as f:
+                f.write(report)
+
+            # 5. 可视化距离分布的累积分布函数 (CDF)
+            plt.figure(figsize=(10, 7))
+            # 计算CDF数据
+            sorted_dists_train = np.sort(dists_train)
+            sorted_dists_holdout = np.sort(dists_holdout)
+            cdf_train = np.arange(1, len(sorted_dists_train) + 1) / len(sorted_dists_train)
+            cdf_holdout = np.arange(1, len(sorted_dists_holdout) + 1) / len(sorted_dists_holdout)
+
+            plt.plot(sorted_dists_train, cdf_train, label='Training Members (Trained on)')
+            plt.plot(sorted_dists_holdout, cdf_holdout, label='Holdout Non-Members (Not Trained on)')
+            plt.title('CDF of Nearest Neighbor Distances')
+            plt.xlabel('Distance to closest synthetic sample')
+            plt.ylabel('Cumulative Probability')
+            plt.legend()
+            plt.grid(True, linestyle=':')
+            plt.text(0.95, 0.05, f'AUC = {auc_score:.4f}', transform=plt.gca().transAxes,
+                     ha='right', va='bottom', bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.5))
+            plt.savefig(os.path.join(save_dir, '5_privacy_reidentification_plot.png'))
+            plt.close()
+
+        except Exception as e:
+            print(f"    - 重识别攻击出错: {e}")
     # ==============================================================================
     # == 第四部分：因果关系 (Causality) 分析 (全新) ==
     # ==============================================================================
@@ -537,13 +598,13 @@ class GoldStandardComparator:
                 print("    - 正在从真实数据推断因果图...")
                 pc_real = PC(data=real_df)
                 # variant='stable' 是一种更可靠的PC算法版本
-                real_model = pc_real.estimate(variant='stable', significance_level=0.01)
+                real_model = pc_real.estimate(variant='stable', significance_level=0.08)
                 real_graph = nx.DiGraph(real_model.edges())
 
                 # 2. 从合成数据中发现因果图
                 print("    - 正在从合成数据推断因果图...")
                 pc_synth = PC(data=synthetic_df)
-                synth_model = pc_synth.estimate(variant='stable', significance_level=0.01)
+                synth_model = pc_synth.estimate(variant='stable', significance_level=0.08)
                 synthetic_graph = nx.DiGraph(synth_model.edges())
 
                 # 3. 比较两个图的结构 - 手动计算SHD
@@ -601,10 +662,10 @@ class GoldStandardComparator:
                 print(f"    - 因果分析出错: {e}")
 
     def run_all_analyses(self):
-        """运行所有分析
+        """运行所有分析"""
         self.analyze_fidelity()
         self.analyze_utility()
-        self.analyze_privacy()"""
+        self.analyze_privacy()
         self.analyze_causality()
         print(f"\n--- 🚀 黄金标准评估已完成！所有报告已生成在目录: {self.output_dir}/ ---")
 

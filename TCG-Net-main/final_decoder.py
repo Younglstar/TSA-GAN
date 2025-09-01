@@ -78,11 +78,29 @@ class FinalDecoder:
         return model
 
     def run_decoding(self):
+
         """
         完整流程：加载GAN生成的潜在数据，用CausalVAE解码器将其还原，并保存最终结果。
         """
         print("\n--- 开始最终解码流程 ---")
-
+        try:
+            # 先尝试GPU
+            with torch.no_grad():
+                latent_tensor = torch.FloatTensor(self.synthetic_latent_data).to(self.device)
+                decoded_data_tensor, _ = self.model.decoder(latent_tensor)
+            final_synthetic_data = decoded_data_tensor.cpu().numpy()
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                print("⚠️ GPU内存不足，切换到CPU运行...")
+                # 切换设备到CPU
+                self.device = torch.device('cpu')
+                self.model = self.model.to(self.device)  # 模型移到CPU
+                with torch.no_grad():
+                    latent_tensor = torch.FloatTensor(self.synthetic_latent_data).to(self.device)
+                    decoded_data_tensor, _ = self.model.decoder(latent_tensor)
+                final_synthetic_data = decoded_data_tensor.numpy()
+            else:
+                raise
         # 使用CausalVAE模型的解码器部分进行解码
         print("  -> 步骤1: 使用CausalVAE解码器还原数据...")
         with torch.no_grad():

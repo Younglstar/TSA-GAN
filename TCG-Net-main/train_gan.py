@@ -72,7 +72,7 @@ def setup_models(input_dim: int, config: GANConfig) -> tuple[Generator, Discrimi
 
 # ========== 主训练函数 ==========
 def main():
-    seed = 2  # 您可以选择任何整数作为种子
+    seed = 3  # 您可以选择任何整数作为种子
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
