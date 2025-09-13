@@ -6,11 +6,10 @@ from typing import List
 
 @dataclass
 class GANConfig:
-    INPUT_DIM: int = 64
     NOISE_DIM: int = 128
     # 生成器不再使用hidden_dims，但为保持兼容性，我们保留它
-    GENERATOR_HIDDEN_DIMS: List[int] = field(default_factory=lambda: [128,256,512])
-    DISCRIMINATOR_HIDDEN_DIMS: List[int] = field(default_factory=lambda: [ 256,256,128])
+    GENERATOR_HIDDEN_DIMS: List[int] = field(default_factory=lambda: [64,128,256])
+    DISCRIMINATOR_HIDDEN_DIMS: List[int] = field(default_factory=lambda: [256,128,64])
 
     # --- 映射网络参数 ---
     W_DIM: int = 64
@@ -25,11 +24,11 @@ class GANConfig:
 
     # --- 训练参数 (核心修改) ---
     # 恢复一个相对平衡的学习率
-    LEARNING_RATE_G: float = 0.0001
-    LEARNING_RATE_D: float = 0.0002
-    LR_DECAY_EPOCHS: int = 100
+    LEARNING_RATE_G: float = 0.000012
+    LEARNING_RATE_D: float = 0.00002
+    LR_DECAY_EPOCHS: int = 200
     LR_DECAY_EPOCHS_G: int = 600
-    LR_DECAY_FACTOR = 0.5  # 学习率衰减倍率
+    LR_DECAY_FACTOR = 0.7  # 学习率衰减倍率
     LR_MULT = 2   # 每次重启周期扩大倍率
     LR_MIN = 1e-6  # 最低学习率
     # 调整Adam优化器的beta1参数，这在GAN训练中很常见，可以增加稳定性
@@ -37,9 +36,9 @@ class GANConfig:
     ADAM_BETA2: float = 0.9  # 每多少个 epoch 衰减一次
 
 
-    BATCH_SIZE: int = 128
-    NUM_EPOCHS: int = 10000
-    N_CRITIC: int = 1
+    BATCH_SIZE: int = 256
+    NUM_EPOCHS: int = 3000
+    N_CRITIC: int = 5
     GRAD_PENALTY_WEIGHT: float = 10.0
 
     # 定义要使用的增强策略，用逗号分隔。可选: 'noise', 'cutout'
@@ -47,11 +46,11 @@ class GANConfig:
     AUGMENT_NOISE_STD: float = 0.02    # 'noise' 策略的参数：噪声的标准差
     # 'cutout' 策略的参数：遮挡窗口大小占总序列长度的比例
     AUGMENT_CUTOUT_RATIO: float = 0.05
-    AUGMENTATION_FACTOR: int = 8
+    AUGMENTATION_FACTOR: int = 1
 
     # ... 其他参数 ...
     DROPOUT_RATE: float = 0.2
-    INSTANCE_NOISE_STD_INIT: float = 0.05   # 判别器输入“实例噪声”起始标准差
+    INSTANCE_NOISE_STD_INIT: float = 0.05  # 判别器输入“实例噪声”起始标准差
     INSTANCE_NOISE_STD_FINAL: float = 0.0   # 线性衰减到 0
     MIXUP_PROB: float = 0.1                # real/fake 小概率mixup，WGAN下的“软标签”替代
     MIXUP_ALPHA: float = 0.2                # mixup强度
@@ -69,4 +68,4 @@ class GANConfig:
     ENCODED_DATA_PATH: str = 'cvae_encoded_data.pkl'
     MODEL_SAVE_PATH: str = 'gan_final_model.pkl'
     SYNTHETIC_DATA_PATH: str = 'synthetic_final_data.pkl'
-    NUM_SYNTHETIC_SAMPLES: int = 1000
+    NUM_SYNTHETIC_SAMPLES: int = 200000

@@ -71,7 +71,7 @@ class Discriminator(nn.Module):
         last = input_dim
         for h in hidden_dims:
             linear = nn.Linear(last, h)
-            if getattr(GANConfig, "USE_SPECTRAL_NORM", True):
+            if (GANConfig, "USE_SPECTRAL_NORM", True):
                 linear = nn.utils.spectral_norm(linear)
             layers += [linear, nn.LeakyReLU(0.2, inplace=False)]
             last = h

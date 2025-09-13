@@ -10,8 +10,14 @@ from sklearn.model_selection import train_test_split
 from pgmpy.estimators import PC
 import networkx as nx
 from scipy.spatial.distance import cdist
-from sklearn.metrics import r2_score, mean_squared_error
-from sklearn.linear_model import LogisticRegression
+# 导入 causal-learn 的核心功能
+from notears.linear import notears_linear
+from causallearn.graph.SHD import SHD # 用于计算结构汉明距离
+from causallearn.graph.GeneralGraph import GeneralGraph
+from causallearn.graph.Node import Node
+from causallearn.graph.Edge import Edge, Endpoint
+from causallearn.graph.SHD import SHD
+from causallearn.utils.GraphUtils import GraphUtils # 用于可视化的工具
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.metrics import roc_auc_score, f1_score, accuracy_score
@@ -33,50 +39,52 @@ from config import DataConfig
 
 
 class GoldStandardComparator:
+
     def __init__(self):
-        # ... (初始化部分保持不变) ...
         self.output_dir = 'final_gold_standard_report'
         os.makedirs(os.path.join(self.output_dir, '1_fidelity'), exist_ok=True)
         os.makedirs(os.path.join(self.output_dir, '2_utility'), exist_ok=True)
         os.makedirs(os.path.join(self.output_dir, '3_privacy'), exist_ok=True)
+        os.makedirs(os.path.join(self.output_dir, '4_causality'), exist_ok=True)
         self.report_content = "--- Synthetic Data Gold Standard Report ---\n\n"
 
         print("📊 正在加载所有分析所需的数据...")
         try:
             gan_conf = GANConfig()
             encdec_conf = EncoderDecoderConfig()
+
+            # 1. 加载合成数据
             with open(gan_conf.SYNTHETIC_DATA_PATH, 'rb') as f:
                 self.synthetic_encoded = pickle.load(f)
-            with open(encdec_conf.ENCODED_DATA_PATH, 'rb') as f:
-                self.real_encoded = pickle.load(f)
 
-            self.n_real = len(self.real_encoded)
+            # 2. 加载完整的真实数据（用于保真度和因果分析）
+            with open(encdec_conf.ENCODED_DATA_PATH, 'rb') as f:
+                self.real_encoded_full = pickle.load(f)
+
+            # 3. 加载在训练前预留的真实测试集
+            with open('test_data_encoded.pkl', 'rb') as f:
+                self.real_test_data = pickle.load(f)
+
+            # 4. 通过差集，重建出GAN实际使用的训练集
+            # 为了精确，我们将数据转换为元组集合进行操作
+            full_set = set(map(tuple, self.real_encoded_full))
+            test_set = set(map(tuple, self.real_test_data))
+            train_set = full_set - test_set
+            self.real_train_data = np.array(list(train_set))
+
             self.n_synthetic = len(self.synthetic_encoded)
-            self.n_features = self.real_encoded.shape[1]
+            self.n_real = len(self.real_encoded_full)
+            self.n_features = self.real_encoded_full.shape[1]
+
             print("数据加载完成！")
+            print(f"  - 真实训练集 (重建后) 大小: {self.real_train_data.shape}")
+            print(f"  - 真实测试集 (预留) 大小: {self.real_test_data.shape}")
+            print(f"  - 合成数据集大小: {self.synthetic_encoded.shape}")
+
         except FileNotFoundError as e:
             print(f"\n❌ 文件未找到错误: {e}")
+            print("  请确保 'train_gan.py' 已成功运行，并生成了 'test_data_encoded.pkl' 文件。")
             raise
-
-        # ========= 🔹 绘制 ROC & AUC 函数 =========
-        def _plot_auc_curve(self, y_true, y_score, title="ROC Curve"):
-            """
-            绘制ROC曲线并显示AUC
-            """
-            fpr, tpr, _ = roc_curve(y_true, y_score)
-            roc_auc = auc(fpr, tpr)
-
-            plt.figure(figsize=(6, 6))
-            plt.plot(fpr, tpr, color="blue", lw=2, label=f"ROC curve (AUC = {roc_auc:.4f})")
-            plt.plot([0, 1], [0, 1], color="gray", lw=1, linestyle="--")
-            plt.xlabel("False Positive Rate")
-            plt.ylabel("True Positive Rate")
-            plt.title(title)
-            plt.legend(loc="lower right")
-            plt.grid(True)
-            plt.show()
-
-            return roc_auc
     # ==============================================================================
     # == 第一部分：数据保真度 (Fidelity) 分析 (保持高水准) ==
     # ==============================================================================
@@ -110,7 +118,7 @@ class GoldStandardComparator:
 
             for i in range(n_plot):
                 # 绘制真实数据的ACF
-                plot_acf(self.real_encoded[:, i], ax=axes[i], lags=lags, title=f'Autocorrelation for Feature {i + 1}',
+                plot_acf(self.real_encoded_full[:, i], ax=axes[i], lags=lags, title=f'Autocorrelation for Feature {i + 1}',
                          label='Real ACF', color='blue', alpha=0.5)
                 # 在同一子图上绘制合成数据的ACF
                 plot_acf(self.synthetic_encoded[:, i], ax=axes[i], lags=lags, label='Synthetic ACF', color='red',
@@ -143,7 +151,7 @@ class GoldStandardComparator:
             if self.n_features == 1: axes = np.array([axes])
             axes = axes.ravel()
             for i in range(self.n_features):
-                real_feature, synth_feature = self.real_encoded[:, i], self.synthetic_encoded[:, i]
+                real_feature, synth_feature = self.real_encoded_full[:, i], self.synthetic_encoded[:, i]
                 ks_stat, p_value = ks_2samp(real_feature, synth_feature)
                 sns.kdeplot(real_feature, ax=axes[i], label='Real', color='blue', fill=True, alpha=0.5)
                 sns.kdeplot(synth_feature, ax=axes[i], label='Synthetic', color='red', fill=True, alpha=0.5)
@@ -162,11 +170,11 @@ class GoldStandardComparator:
         print("  -> 正在分析统计矩...")
         # ... (此方法的代码保持不变)
         try:
-            moments = {'mean': (np.mean(self.real_encoded, axis=0), np.mean(self.synthetic_encoded, axis=0)),
-                       'std': (np.std(self.real_encoded, axis=0), np.std(self.synthetic_encoded, axis=0)),
-                       'skew': (stats.skew(self.real_encoded, axis=0), stats.skew(self.synthetic_encoded, axis=0)),
+            moments = {'mean': (np.mean(self.real_encoded_full, axis=0), np.mean(self.synthetic_encoded, axis=0)),
+                       'std': (np.std(self.real_encoded_full, axis=0), np.std(self.synthetic_encoded, axis=0)),
+                       'skew': (stats.skew(self.real_encoded_full, axis=0), stats.skew(self.synthetic_encoded, axis=0)),
                        'kurtosis': (
-                           stats.kurtosis(self.real_encoded, axis=0), stats.kurtosis(self.synthetic_encoded, axis=0))}
+                           stats.kurtosis(self.real_encoded_full, axis=0), stats.kurtosis(self.synthetic_encoded, axis=0))}
             fig, axes = plt.subplots(2, 2, figsize=(15, 15))
             axes = axes.ravel()
             for i, (moment_name, (real_moment, synth_moment)) in enumerate(moments.items()):
@@ -190,7 +198,7 @@ class GoldStandardComparator:
         print("  -> 正在进行相关性分析...")
         # ... (此方法的代码保持不变)
         try:
-            real_corr, synth_corr = np.corrcoef(self.real_encoded.T), np.corrcoef(self.synthetic_encoded.T)
+            real_corr, synth_corr = np.corrcoef(self.real_encoded_full.T), np.corrcoef(self.synthetic_encoded.T)
             fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(21, 6))
             sns.heatmap(real_corr, ax=ax1, cmap='coolwarm', center=0, vmin=-1, vmax=1).set_title(
                 'Real Data Correlations')
@@ -225,7 +233,7 @@ class GoldStandardComparator:
         print("  -> 正在运行降维分析 (PCA & t-SNE)...")
         # ... (此方法的代码保持不变)
         try:
-            combined_data = np.vstack([self.real_encoded, self.synthetic_encoded])
+            combined_data = np.vstack([self.real_encoded_full, self.synthetic_encoded])
             labels = ['Real'] * self.n_real + ['Synthetic'] * self.n_synthetic
 
             pca = PCA(n_components=3)
@@ -274,17 +282,17 @@ class GoldStandardComparator:
         """(源自第二个脚本) 生成并保存详细的总结报告"""
         print("  -> 正在生成总结报告...")
         try:
-            stats_dict = {'Real_Mean': np.mean(self.real_encoded, axis=0),
+            stats_dict = {'Real_Mean': np.mean(self.real_encoded_full, axis=0),
                           'Synthetic_Mean': np.mean(self.synthetic_encoded, axis=0),
-                          'Real_Std': np.std(self.real_encoded, axis=0),
+                          'Real_Std': np.std(self.real_encoded_full, axis=0),
                           'Synthetic_Std': np.std(self.synthetic_encoded, axis=0),
-                          'Real_Skew': stats.skew(self.real_encoded, axis=0),
+                          'Real_Skew': stats.skew(self.real_encoded_full, axis=0),
                           'Synthetic_Skew': stats.skew(self.synthetic_encoded, axis=0),
-                          'Real_Kurtosis': stats.kurtosis(self.real_encoded, axis=0),
+                          'Real_Kurtosis': stats.kurtosis(self.real_encoded_full, axis=0),
                           'Synthetic_Kurtosis': stats.kurtosis(self.synthetic_encoded, axis=0)}
             ks_stats, ks_pvals = [], []
             for i in range(self.n_features):
-                ks_stat, p_val = ks_2samp(self.real_encoded[:, i], self.synthetic_encoded[:, i])
+                ks_stat, p_val = ks_2samp(self.real_encoded_full[:, i], self.synthetic_encoded[:, i])
                 ks_stats.append(ks_stat)
                 ks_pvals.append(p_val)
             stats_dict['KS_Statistic'], stats_dict['KS_P_Value'] = ks_stats, ks_pvals
@@ -322,16 +330,20 @@ class GoldStandardComparator:
         print("✅ 数据可用性分析完成。")
 
     def _run_enhanced_tstr_evaluation(self, save_dir):
-        """(已增强) 使用多种模型进行TSTR评估"""
-        print("  -> 正在使用多种模型进行下游任务可用性评估 (TSTR)...")
+        """(已修改) 使用预定义的训练/测试集进行TSTR评估"""
+        print("  -> 正在使用预留测试集进行下游任务可用性评估 (TSTR)...")
         try:
-            X_real, y_real_reg = self.real_encoded[:, 1:], self.real_encoded[:, 0]
-            y_real_clf = y_real_reg > np.median(y_real_reg)
-            X_synth, y_synth_reg = self.synthetic_encoded[:, 1:], self.synthetic_encoded[:, 0]
-            y_synth_clf = y_synth_reg > np.median(y_synth_reg)
+            # 准备合成数据 (训练集)
+            X_synth_train, y_synth_reg = self.synthetic_encoded[:, 1:], self.synthetic_encoded[:, 0]
+            y_synth_train_clf = y_synth_reg > np.median(y_synth_reg)
 
-            X_real_train, X_real_test, y_real_train_clf, y_real_test_clf = train_test_split(
-                X_real, y_real_clf, test_size=0.3, random_state=42)
+            # 准备真实训练数据 (用于训练基准模型)
+            X_real_train, y_real_train_reg = self.real_train_data[:, 1:], self.real_train_data[:, 0]
+            y_real_train_clf = y_real_train_reg > np.median(y_real_train_reg)
+
+            # 准备真实测试数据 (用于评估所有模型)
+            X_real_test, y_real_test_reg = self.real_test_data[:, 1:], self.real_test_data[:, 0]
+            y_real_test_clf = y_real_test_reg > np.median(y_real_test_reg)
 
             models = {
                 "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
@@ -341,12 +353,14 @@ class GoldStandardComparator:
             results = {}
 
             for name, model in models.items():
-                # 基准模型
+                # 基准模型：在真实训练集上训练，在真实测试集上评估
                 model_real = model.fit(X_real_train, y_real_train_clf)
                 score_real = roc_auc_score(y_real_test_clf, model_real.predict_proba(X_real_test)[:, 1])
-                # 合成模型
-                model_synth = model.fit(X_synth, y_synth_clf)
+
+                # 合成模型：在合成数据上训练，在真实测试集上评估
+                model_synth = model.fit(X_synth_train, y_synth_train_clf)
                 score_synth = roc_auc_score(y_real_test_clf, model_synth.predict_proba(X_real_test)[:, 1])
+
                 results[name] = [score_real, score_synth]
 
             results_df = pd.DataFrame.from_dict(results, orient='index',
@@ -354,14 +368,12 @@ class GoldStandardComparator:
             results_df['Utility Score (%)'] = (results_df['Synthetic (Train on Synthetic)'] / results_df[
                 'Benchmark (Train on Real)']) * 100
 
-            # 报告
+            # ... (报告和可视化的代码保持不变) ...
             report = "--- 增强版下游任务可用性 (TSTR) 报告 ---\n\n" + results_df.to_string() + "\n\n解读: Utility Score越接近100%，说明合成数据在各种任务下的可用性越高。\n"
             print(report)
             self.report_content += report
             with open(os.path.join(save_dir, '1_utility_tstr_report.txt'), 'w') as f:
                 f.write(report)
-
-            # 可视化
             results_df.plot(kind='bar', figsize=(12, 7))
             plt.title('TSTR Utility Comparison Across Different Models')
             plt.ylabel('AUROC Score on Real Test Set')
@@ -380,10 +392,11 @@ class GoldStandardComparator:
         print("\n--- 3. 开始隐私保护 (Privacy) 分析 ---")
         save_dir = os.path.join(self.output_dir, '3_privacy')
 
-        # 将真实数据划分为训练部分和留出部分，用于攻击模拟
-        real_train, real_holdout = train_test_split(self.real_encoded, test_size=0.5, random_state=42)
+        # 使用在__init__中重建的训练集和加载的测试集
+        real_train = self.real_train_data
+        real_holdout = self.real_test_data
 
-        self._run_membership_inference_attack(real_train, real_holdout, save_dir)
+        self._run_membership_inference_attack(real_train, self.synthetic_encoded, save_dir)
         self._run_attribute_inference_attack(real_train, save_dir)
         self._run_reidentification_attack(real_train, real_holdout, save_dir)
         print("✅ 隐私保护分析完成。")
@@ -508,31 +521,58 @@ class GoldStandardComparator:
         except Exception as e:
             print(f"    - 属性推断攻击出错: {e}")
 
+    def _calculate_min_dists_in_batches(self, source_data, target_data, batch_size=1024):
+        """
+        (辅助函数) 分块计算源数据中每个点到目标数据集的最近邻距离。
+        这避免了创建巨大的距离矩阵，从而解决了内存溢出问题。
+        """
+        print(f"    - 正在分块计算 {source_data.shape[0]} 个样本的最近邻距离...")
+
+        # 转换为float32可以减少一半的内存占用，同时保持足够的精度
+        source_data = source_data.astype(np.float32)
+        target_data = target_data.astype(np.float32)
+
+        all_min_dists = []
+        num_batches = int(np.ceil(source_data.shape[0] / batch_size))
+
+        # 使用tqdm创建进度条
+        for i in tqdm(range(num_batches), desc="  -> 计算距离"):
+            start_index = i * batch_size
+            end_index = min((i + 1) * batch_size, source_data.shape[0])
+            batch = source_data[start_index:end_index]
+
+            # 计算当前批次与所有目标数据点的距离矩阵
+            # 这个矩阵很小，例如 (1024, 100000)
+            dist_matrix_chunk = cdist(batch, target_data, metric='euclidean')
+
+            # 找到当前批次中每个点的最近邻距离，并保存
+            min_dists_chunk = dist_matrix_chunk.min(axis=1)
+            all_min_dists.append(min_dists_chunk)
+
+        # 将所有批次的结果拼接成一个完整的数组
+        return np.concatenate(all_min_dists)
+
     def _run_reidentification_attack(self, real_train, real_holdout, save_dir):
         """
-        (全新) 执行基于最近邻距离的重识别攻击模拟。
+        (全新-已修正) 执行基于最近邻距离的重识别攻击模拟。
+        使用分块处理来避免内存溢出。
         """
         print("  -> 正在进行重识别攻击 (最近邻) 模拟...")
         try:
-            # 1. 计算每个真实训练集成员到合成数据集的最近邻距离
-            # cdist 计算两个点集之间的距离矩阵
-            dist_matrix_train = cdist(real_train, self.synthetic_encoded, metric='euclidean')
-            dists_train = dist_matrix_train.min(axis=1)
+            # 1. (修正) 分块计算每个真实训练集成员到合成数据集的最近邻距离
+            dists_train = self._calculate_min_dists_in_batches(real_train, self.synthetic_encoded)
 
-            # 2. 计算每个真实留出集成员到合成数据集的最近邻距离
-            dist_matrix_holdout = cdist(real_holdout, self.synthetic_encoded, metric='euclidean')
-            dists_holdout = dist_matrix_holdout.min(axis=1)
+            # 2. (修正) 分块计算每个真实留出集成员到合成数据集的最近邻距离
+            dists_holdout = self._calculate_min_dists_in_batches(real_holdout, self.synthetic_encoded)
 
-            # 3. 使用 ROC-AUC 分数来量化可区分性
-            # 将距离拼接起来，标签1代表训练成员，0代表非成员
+            # 3. 使用 ROC-AUC 分数来量化可区分性 (此部分无需改动)
             all_dists = np.concatenate([dists_train, dists_holdout])
             all_labels = np.concatenate([np.ones_like(dists_train), np.zeros_like(dists_holdout)])
-
-            # 注意：距离越小，是成员的概率越高。因此我们需要使用负距离作为分数。
             auc_score = roc_auc_score(all_labels, -all_dists)
 
-            # 4. 生成报告
+            # 4. 生成报告 (此部分无需改动)
             report = f"\n--- 重识别攻击 (Re-identification) 报告 ---\n\n"
+            # ... (报告内容与之前相同) ...
             report += f"方法: 基于最近邻距离的成员与非成员可区分性分析。\n"
             report += f"重识别风险分数 (AUC): {auc_score:.4f}\n\n"
             report += "解读:\n"
@@ -545,9 +585,9 @@ class GoldStandardComparator:
             with open(os.path.join(save_dir, '4_privacy_reidentification_report.txt'), 'w') as f:
                 f.write(report)
 
-            # 5. 可视化距离分布的累积分布函数 (CDF)
+            # 5. 可视化距离分布的累积分布函数 (CDF) (此部分无需改动)
             plt.figure(figsize=(10, 7))
-            # 计算CDF数据
+            # ... (绘图代码与之前相同) ...
             sorted_dists_train = np.sort(dists_train)
             sorted_dists_holdout = np.sort(dists_holdout)
             cdf_train = np.arange(1, len(sorted_dists_train) + 1) / len(sorted_dists_train)
@@ -575,12 +615,10 @@ class GoldStandardComparator:
         print("\n--- 4. 开始因果关系 (Causality) 分析 ---")
         save_dir = os.path.join(self.output_dir, '4_causality')
         os.makedirs(save_dir, exist_ok=True)
-
         report = "\n--- 因果关系分析报告 ---\n\n错误: 缺少必要的库 (cdt, networkx)，无法执行此分析。\n"
         with open(os.path.join(save_dir, 'causal_discovery_report.txt'), 'w') as f:
             f.write(report)
-
-
+        self._run_causal_discovery_notears(save_dir)
         self._run_causal_discovery_analysis(save_dir)
         print("✅ 因果关系分析完成。")
         return
@@ -591,20 +629,22 @@ class GoldStandardComparator:
             print("  -> 正在运行因果发现 (PC算法)...")
             try:
                 # 将numpy数组转换为pandas DataFrame
-                real_df = pd.DataFrame(self.real_encoded, columns=[f'F{i}' for i in range(self.n_features)])
+                real_df = pd.DataFrame(self.real_encoded_full, columns=[f'F{i}' for i in range(self.n_features)])
                 synthetic_df = pd.DataFrame(self.synthetic_encoded, columns=[f'F{i}' for i in range(self.n_features)])
 
                 # 1. 从真实数据中发现因果图
                 print("    - 正在从真实数据推断因果图...")
                 pc_real = PC(data=real_df)
                 # variant='stable' 是一种更可靠的PC算法版本
-                real_model = pc_real.estimate(variant='stable', significance_level=0.08)
+                # 为连续数据指定 ci_test='pearsonr'
+                real_model = pc_real.estimate(variant='stable', ci_test='pearsonr', significance_level=0.05,n_jobs=-1)
                 real_graph = nx.DiGraph(real_model.edges())
 
                 # 2. 从合成数据中发现因果图
                 print("    - 正在从合成数据推断因果图...")
                 pc_synth = PC(data=synthetic_df)
-                synth_model = pc_synth.estimate(variant='stable', significance_level=0.08)
+                # 为连续数据指定 ci_test='pearsonr'
+                synth_model = pc_synth.estimate(variant='stable', ci_test='pearsonr', significance_level=0.05,n_jobs=-1)
                 synthetic_graph = nx.DiGraph(synth_model.edges())
 
                 # 3. 比较两个图的结构 - 手动计算SHD
@@ -666,8 +706,103 @@ class GoldStandardComparator:
         self.analyze_fidelity()
         self.analyze_utility()
         self.analyze_privacy()
-        self.analyze_causality()
+        #self.analyze_causality()
         print(f"\n--- 🚀 黄金标准评估已完成！所有报告已生成在目录: {self.output_dir}/ ---")
+
+    def adj_to_graph(adj_matrix, node_names):
+        """将邻接矩阵转换为 causal-learn 的 GeneralGraph 对象"""
+        nodes = [Node(name) for name in node_names]
+        g = GeneralGraph(nodes)
+        for i in range(len(node_names)):
+            for j in range(len(node_names)):
+                if adj_matrix[i, j] != 0:  # 非零即认为存在因果边
+                    g.add_edge(Edge(nodes[i], nodes[j], Endpoint.TAIL, Endpoint.ARROW))
+        return g
+
+    def _matrix_to_graph(weight_matrix, columns, threshold=0.3):
+        """
+        将 NOTEARS 输出的权重矩阵转换为 NetworkX 有向图。
+        """
+        graph = nx.DiGraph()
+        graph.add_nodes_from(columns)
+        for i in range(len(columns)):
+            for j in range(len(columns)):
+                if abs(weight_matrix[i, j]) > threshold:
+                    graph.add_edge(columns[i], columns[j])
+        return graph
+
+    def _run_causal_discovery_notears(self, save_dir):
+        """
+        使用 NOTEARS 发现因果结构并计算 SHD
+        """
+        print("  -> 正在运行因果发现 (NOTEARS算法)...")
+        try:
+            real_data = self.real_encoded_full.astype(np.float32)
+            synthetic_data = self.synthetic_encoded.astype(np.float32)
+            feature_names = [f'F{i}' for i in range(self.n_features)]
+
+            # 1. NOTEARS 发现因果权重矩阵
+            print("    - 从真实数据推断因果图...")
+            real_return_values = notears_linear(real_data, lambda1=0.1, loss_type='l2')
+            # 权重矩阵 W 始终是第一个返回的元素
+            real_weight_matrix = real_return_values[0]
+
+            print("    - 正在从合成数据推断因果图...")
+            synth_return_values = notears_linear(synthetic_data, lambda1=0.1, loss_type='l2')
+            synth_weight_matrix = synth_return_values[0]
+
+            # [可选的调试步骤] 如果您好奇，可以取消下面两行的注释，看看函数到底返回了几个值
+            print(f"NOTEARS returned {len(real_return_values)} items.")
+
+            # 2. 转换为 networkx 图用于可视化
+            real_graph_nx = self._matrix_to_graph(real_weight_matrix, feature_names)
+            synth_graph_nx = self._matrix_to_graph(synth_weight_matrix, feature_names)
+
+            # 3. 转换为邻接矩阵 → causal-learn Graph → SHD
+            real_adj = nx.to_numpy_array(real_graph_nx, nodelist=feature_names)
+            synth_adj = nx.to_numpy_array(synth_graph_nx, nodelist=feature_names)
+
+            real_graph_cl = self.adj_to_graph(real_adj, feature_names)
+            synth_graph_cl = self.adj_to_graph(synth_adj, feature_names)
+
+            shd_score = SHD(real_graph_cl, synth_graph_cl).get_shd()
+
+            # 4. 生成报告
+            report = "\n--- 因果发现与比较报告 (NOTEARS) ---\n\n"
+            report += "方法: NOTEARS 因果发现算法 + 结构汉明距离 (SHD)\n"
+            report += "重要假设: 因果关系是无环的，且不存在隐变量。\n\n"
+            report += f"结构汉明距离 (SHD): {shd_score}\n\n"
+            report += "解读:\n"
+            report += " - SHD衡量合成数据与真实数据因果图的差异。\n"
+            report += " - SHD = 0 表示合成数据完美复现真实因果结构。\n"
+            report += " - 值越小越好。\n"
+
+            print(report)
+            self.report_content += report
+            with open(os.path.join(save_dir, '1_causal_discovery_report_notears.txt'), 'w') as f:
+                f.write(report)
+
+            # 5. 可视化
+            fig, axes = plt.subplots(1, 2, figsize=(20, 9))
+            fig.suptitle('Causal Graphs Comparison (using NOTEARS)', fontsize=16)
+
+            pos = nx.circular_layout(real_graph_nx)
+            nx.draw(real_graph_nx, pos=pos, ax=axes[0], with_labels=True,
+                    node_color='skyblue', edge_color='gray',
+                    node_size=2000, font_size=10, arrows=True)
+            axes[0].set_title('Discovered Causal Graph from REAL Data')
+
+            nx.draw(synth_graph_nx, pos=pos, ax=axes[1], with_labels=True,
+                    node_color='lightcoral', edge_color='gray',
+                    node_size=2000, font_size=10, arrows=True)
+            axes[1].set_title(f'Discovered Causal Graph from SYNTHETIC Data\nSHD = {shd_score}')
+
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            plt.savefig(os.path.join(save_dir, '2_causal_graphs_comparison_notears.png'))
+            plt.close()
+
+        except Exception as e:
+            print(f"    - 因果分析 (NOTEARS) 出错: {e}")
 
 
 def main():

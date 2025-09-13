@@ -93,10 +93,15 @@ def train(encdec_config: EncoderDecoderConfig, data_config: DataConfig,
     # 5. 训练模型
     trainer = EncoderDecoderTrainer(model, encdec_config, device)
     print("\n[步骤 4/4] 开始训练 (带学习率调度和早停)...")
-    best_val_loss = float('inf');
+    best_val_loss = float('inf')
     epochs_no_improve = 0
     train_history, val_history = [], []
-
+    # --- 新增的诊断代码 ---
+    print("\n[诊断信息] 检查数据集大小:")
+    print(f"  - 总样本数 (len(dataset)): {len(dataset)}")
+    print(f"  - 训练集大小 (train_size): {train_size}")
+    print(f"  - 验证集大小 (val_size): {val_size}")
+    print(f"  - 训练加载器批次数 (len(train_loader)): {len(train_loader)}")
     for epoch in range(encdec_config.NUM_EPOCHS):
         print(f"\n--- Epoch {epoch + 1}/{encdec_config.NUM_EPOCHS} ---")
         train_losses = trainer.train_epoch(train_loader, epoch)

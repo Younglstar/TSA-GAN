@@ -19,10 +19,10 @@ class DataConfig:
 
     # 主体ID列：用于唯一标识每个独立个体（例如：患者ID，股票代码，用户ID）。
     # 这是关联同一个体的所有记录的关键。
-    SUBJECT_ID_COL: str ='Country' #'Name'
+    SUBJECT_ID_COL: str ='dataid' #'Name'
 
     # 时间戳列：表示时间序列数据中的时间点或序列顺序。
-    TIMESTAMP_COL: str = 'Date'
+    TIMESTAMP_COL: str = 'localminute'#'local_15min'
 
     # --- 2. 特征列定义 ---
     # 在这里定义哪些列是特征，以及它们的具体类型。
@@ -30,17 +30,23 @@ class DataConfig:
 
     # 静态特征 (Static Features): 对于同一个主体，这些特征值是固定不变的。
     STATIC_NUMERICAL_FEATURES: List[str] = field(default_factory=list)
-    STATIC_CATEGORICAL_FEATURES: List[str] = field(default_factory=lambda:['Country'])
+    STATIC_CATEGORICAL_FEATURES: List[str] = field(default_factory=list)
 
     # 时序特征 (Temporal Features): 这些特征值会随时间戳变化。
     TEMPORAL_NUMERICAL_FEATURES: List[str] = field(
-        default_factory=lambda:['Confirmed','Recovered','Deaths'] #['Open', 'High', 'Low', 'Close', 'Volume']
+        default_factory=lambda: ['air1','bathroom1','bedroom1','car1','circpump1',
+                                 'clotheswasher1','clotheswasher_dryg1','dishwasher1',
+                                 'drye1','freezer1','furnace1','garage1','grid','heater1',
+                                 'kitchenapp1','kitchenapp2','lights_plugs1','lights_plugs2',
+                                 'livingroom1','microwave1','oven1','pump1','range1','refrigerator1',
+                                 'solar','waterheater1','wellpump1','leg1v','leg2v'
+]#['air1','bathroom1','bedroom1','car1','clotheswasher1','clotheswasher_dryg1','dishwasher1','disposal1','drye1','dryg1','furnace1','garage1','grid','kitchenapp1','kitchenapp2','lights_plugs1','lights_plugs2','livingroom1','microwave1','oven1','range1','refrigerator1','solar','venthood1','waterheater1','leg1v','leg2v'] #['Open', 'High', 'Low', 'Close', 'Volume']
     )
     TEMPORAL_CATEGORICAL_FEATURES: List[str] = field(default_factory=list)
     # 注意：在您的例子中 'Name' 是 ID，而不是时序特征，所以我已将其移至 SUBJECT_ID_COL。
 
     # --- 3. 文件路径定义 ---
-    INPUT_FILE: str = 'countries-aggregated.csv'
+    INPUT_FILE: str = '1s_modified.csv'
     PROCESSED_FILE: str = 'processed_data.pkl'
 
     # --- 4. 辅助属性 (通常无需修改) ---

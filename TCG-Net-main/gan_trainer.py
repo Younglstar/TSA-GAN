@@ -277,13 +277,10 @@ class GANTrainer:
             real_aug = self._apply_instance_noise(real_data)
             fake_aug = self._apply_instance_noise(fake_data)
             real_aug, fake_aug = self._maybe_mixup(real_aug, fake_aug)
-
             d_real = self.discriminator(real_aug)
             d_fake = self.discriminator(fake_aug.detach())
-
             # WGAN原始损失
             d_loss = torch.mean(d_fake) - torch.mean(d_real)
-
             # --- 诊断性修改：当DP启用时，暂时禁用梯度惩罚 ---
             if self.dp_enabled:
                 # 在DP模式下，不计算梯度惩罚

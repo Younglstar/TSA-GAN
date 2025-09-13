@@ -63,6 +63,8 @@ class DataProcessor:
         # --- 3. 准备时序数据 (分组、填充、堆叠) ---
         print("2. 正在将时序DataFrame转换为3D张量...")
         # 按主体ID分组
+        print("Columns in temporal_data:", temporal_data.columns)
+
         grouped = temporal_data.groupby(subject_id_col)
 
         # 计算最大序列长度
@@ -76,7 +78,6 @@ class DataProcessor:
 
         # 创建一个空的3D数组用于存放结果
         temporal_features_np = np.zeros((num_subjects, max_seq_len, temporal_dim))
-
         # 遍历每个主体，填充3D数组
         for i, subject_id in enumerate(subject_order):
             if subject_id in grouped.groups:

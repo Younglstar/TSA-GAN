@@ -47,8 +47,62 @@ class DataNormalizationProcessor:
                 print(f"  - 警告: 特征 '{feature}' 在静态数据中未找到，已跳过。")
 
         return normalized_static
-
     def normalize_temporal_features(self, temporal_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        (优化版) 批量归一化 DataConfig 中定义的时序数值特征。
+        - 数值特征: 使用 StochasticNormalizer 进行归一化
+        - 类别特征 & 元数据: 保留
+        """
+
+        numerical_features = self.data_config.TEMPORAL_NUMERICAL_FEATURES
+
+        if not numerical_features or temporal_data.empty:
+            print("没有要归一化的时序数值特征或时序数据为空，直接返回。")
+            return temporal_data
+
+        # 过滤出实际存在的数值特征，避免重复判断
+        available_features = [f for f in numerical_features if f in temporal_data.columns]
+
+        if not available_features:
+            print("未找到任何可归一化的时序数值特征，直接返回。")
+            return temporal_data
+
+        print(f"将要归一化的时序数值特征: {available_features}")
+
+        # 避免整体 copy，只对需要归一化的列单独 copy
+        normalized_temporal = temporal_data.copy()
+
+        # 循环处理，但减少对象创建
+        for feature in available_features:
+            print(f"  - 正在处理时序特征: '{feature}'")
+            normalizer = StochasticNormalizer(self.norm_config)
+            normalized_values = normalizer.fit_transform(temporal_data[feature].to_numpy())
+
+            # 直接替换列，避免逐元素赋值
+            normalized_temporal[feature] = normalized_values
+
+            # 保存 normalizer 参数
+            param_key = f'temporal_{feature}'
+            self.normalizers[param_key] = normalizer
+            normalizer.save_params(param_key)
+
+        # 打印缺失特征一次性提示
+        missing_features = set(numerical_features) - set(available_features)
+        if missing_features:
+            print(f"警告: 下列特征在时序数据中未找到，已跳过: {list(missing_features)}")
+
+        return normalized_temporal
+    def save_normalization_params(self) -> None:
+        """将所有特征的归一化参数保存到文件。"""
+        with open(self.norm_config.NORMALIZATION_PARAMS_FILE, 'wb') as f:
+            # 现在保存的是 norm_config 内部的字典
+            pickle.dump(self.norm_config.normalization_params, f)
+
+    def load_normalization_params(self) -> None:
+        """从文件加载归一化参数。"""
+        with open(self.norm_config.NORMALIZATION_PARAMS_FILE, 'rb') as f:
+            self.norm_config.normalization_params = pickle.load(f)
+'''    def normalize_temporal_features(self, temporal_data: pd.DataFrame) -> pd.DataFrame:
         """
         (已重写) 动态地归一化在 DataConfig 中定义的时序数值特征。
         类别特征和元数据列将被保留，不做改动。
@@ -75,15 +129,4 @@ class DataNormalizationProcessor:
             else:
                 print(f"  - 警告: 特征 '{feature}' 在时序数据中未找到，已跳过。")
 
-        return normalized_temporal
-
-    def save_normalization_params(self) -> None:
-        """将所有特征的归一化参数保存到文件。"""
-        with open(self.norm_config.NORMALIZATION_PARAMS_FILE, 'wb') as f:
-            # 现在保存的是 norm_config 内部的字典
-            pickle.dump(self.norm_config.normalization_params, f)
-
-    def load_normalization_params(self) -> None:
-        """从文件加载归一化参数。"""
-        with open(self.norm_config.NORMALIZATION_PARAMS_FILE, 'rb') as f:
-            self.norm_config.normalization_params = pickle.load(f)
+        return normalized_temporal'''

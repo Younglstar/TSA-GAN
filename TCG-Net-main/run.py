@@ -43,9 +43,9 @@ def main():
         "normalize_main.py",  # 2. 数值归一化，生成 normalized_data.pkl
         "embedding_main.py",  # 3. 类别嵌入学习，生成 categorical_embeddings.pkl
         "train_encdec.py",  # 4. 训练CausalVAE模型，生成 causal_vae_model_best.pkl 和 encoded data
-        "train_gan.py",  # 5. 训练高级GAN模型，生成 gan_final_model.pkl 和 synthetic data
-        "final_decoder.py",  # 6. 解码GAN生成的潜在数据，生成 final_synthetic_data.pkl
-        "final_comparison.py"  # 7. 生成最终的、全面的对比分析报告
+        #"train_gan.py",  # 5. 训练高级GAN模型，生成 gan_final_model.pkl 和 synthetic data
+        #"final_decoder.py",  # 6. 解码GAN生成的潜在数据，生成 final_synthetic_data.pkl
+        #"final_comparison.py"  # 7. 生成最终的、全面的对比分析报告
     ]
 
     # --- 按顺序执行所有步骤 ---
